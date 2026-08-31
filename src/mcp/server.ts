@@ -9,6 +9,8 @@ import { registerGetSchoolLife } from './tools/getSchoolLife.js';
 import { registerGetClassLife } from './tools/getClassLife.js';
 import { registerGetTimeline } from './tools/getTimeline.js';
 import { registerGetAuthStatus } from './tools/getAuthStatus.js';
+import { registerMarkHomeworkDone } from './tools/markHomeworkDone.js';
+import { registerDownloadDocument } from './tools/downloadDocument.js';
 
 export interface ToolContext {
   client: EcoleDirecteClient;
@@ -25,5 +27,7 @@ export function buildServer(context: ToolContext): McpServer {
   registerGetClassLife(server, context);
   registerGetTimeline(server, context);
   registerGetAuthStatus(server, context);
+  registerMarkHomeworkDone(server, context);
+  registerDownloadDocument(server, context);
   return server;
 }

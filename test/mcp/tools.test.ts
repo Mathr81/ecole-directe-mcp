@@ -107,3 +107,64 @@ describe('get_auth_status tool', () => {
     expect(JSON.parse(textOf(result as { content: unknown }))).toMatchObject({ sessionExists: false });
   });
 });
+
+describe('mark_homework_done tool', () => {
+  it('marks homework done when not read-only', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({ READ_ONLY: 'false' }),
+    });
+
+    await mcpClient.callTool({ name: 'mark_homework_done', arguments: { homeworkId: '42', done: true } });
+
+    expect(fake.callCounts.markHomeworkDone).toBe(1);
+  });
+
+  it('is not registered at all when READ_ONLY is true', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({ READ_ONLY: 'true' }),
+    });
+
+    const { tools } = await mcpClient.listTools();
+
+    expect(tools.map((t) => t.name)).not.toContain('mark_homework_done');
+  });
+});
+
+describe('download_document tool', () => {
+  it('returns a file path, not inline content', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.downloadResult = { path: '/downloads/123', filename: '123', mimeType: 'application/octet-stream', sizeBytes: 42 };
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({}),
+    });
+
+    const result = await mcpClient.callTool({ name: 'download_document', arguments: { fileId: '123', fileType: 'PJ' } });
+
+    expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.downloadResult);
+  });
+
+  it('remains registered even when READ_ONLY is true (it only writes local files)', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({ READ_ONLY: 'true' }),
+    });
+
+    const { tools } = await mcpClient.listTools();
+
+    expect(tools.map((t) => t.name)).toContain('download_document');
+  });
+});
