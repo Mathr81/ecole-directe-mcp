@@ -10,11 +10,20 @@ import {
   Require2FA,
   type Credential,
 } from '@blockshub/blocksdirecte';
-import { InvalidCredentialsError, InvalidTwoFactorAnswerError, mapCaughtError, wrapCall } from './errors.js';
+import { InvalidCredentialsError, InvalidTwoFactorAnswerError, PossiblyExpiredSessionError, mapCaughtError, wrapCall } from './errors.js';
 import { mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
 
 type AccountKindValue = Parameters<InstanceType<typeof Client>['auth']['refreshToken']>[1];
+
+function assertPresent<T>(value: T | null | undefined, context: string): T {
+  if (value === null || value === undefined) {
+    throw new PossiblyExpiredSessionError(
+      `École Directe (${context}) a renvoyé une réponse vide — session probablement expirée.`,
+    );
+  }
+  return value;
+}
 
 const credentialCache = new Map<string, Credential>();
 
@@ -114,7 +123,7 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     async getGrades(session, schoolYear) {
       return wrapCall(async () => {
         const client = await ensureClient(session);
-        const marks = await client.marks.getMark(schoolYear);
+        const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
         return mapGrades(marks.notes);
       });
     },
@@ -122,11 +131,11 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     async getHomework(session, fromDate, toDate) {
       return wrapCall(async () => {
         const client = await ensureClient(session);
-        const upcoming = await client.homework.getUpcomingHomework();
+        const upcoming = assertPresent(await client.homework.getUpcomingHomework(), 'getUpcomingHomework');
         const dates = Object.keys(upcoming).filter((date) => date >= fromDate && date <= toDate);
         const perDate: Array<{ date: string; response: Awaited<ReturnType<typeof client.homework.getHomeworksForDate>> }> = [];
         for (const date of dates) {
-          const response = await client.homework.getHomeworksForDate(date);
+          const response = assertPresent(await client.homework.getHomeworksForDate(date), 'getHomeworksForDate');
           perDate.push({ date, response });
         }
         return mapHomework(perDate);
@@ -148,7 +157,10 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     async getTimetable(session, fromDate, toDate) {
       return wrapCall(async () => {
         const client = await ensureClient(session);
-        const courses = await client.timetable.getTimetableBetweenDates(new Date(fromDate), new Date(toDate));
+        const courses = assertPresent(
+          await client.timetable.getTimetableBetweenDates(new Date(fromDate), new Date(toDate)),
+          'getTimetableBetweenDates',
+        );
         return mapTimetable(courses);
       });
     },
@@ -156,21 +168,21 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     async getSchoolLife(session) {
       return wrapCall(async () => {
         const client = await ensureClient(session);
-        return mapSchoolLife(await client.schoollife.getSchoolLife());
+        return mapSchoolLife(assertPresent(await client.schoollife.getSchoolLife(), 'getSchoolLife'));
       });
     },
 
     async getClassLife(session) {
       return wrapCall(async () => {
         const client = await ensureClient(session);
-        return mapClassLife(await client.classlife.getClassLife());
+        return mapClassLife(assertPresent(await client.classlife.getClassLife(), 'getClassLife'));
       });
     },
 
     async getTimeline(session) {
       return wrapCall(async () => {
         const client = await ensureClient(session);
-        return mapTimeline(await client.timeline.getPersonalTimeline());
+        return mapTimeline(assertPresent(await client.timeline.getPersonalTimeline(), 'getPersonalTimeline'));
       });
     },
 
