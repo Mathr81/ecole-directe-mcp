@@ -15,6 +15,26 @@ export class TokenExpiredError extends EcoleDirecteApiError {}
 export class SchoolUnavailableError extends EcoleDirecteApiError {}
 export class InvalidTwoFactorAnswerError extends EcoleDirecteApiError {}
 
+/**
+ * Thrown by the adapter (Task 6) when a BlocksDirecte data method returns
+ * null/undefined where it structurally guarantees an object or array — the
+ * one observable symptom of an expired token for those methods, since
+ * @blockshub/blocksdirecte discards École Directe's numeric error code
+ * before it reaches the adapter for anything other than login/refresh/2FA.
+ * Treated identically to TokenExpiredError by withAutoRefresh. Do not
+ * remove this as "unreachable defensive code" — it is the only signal
+ * available for 8 of the 9 data methods. See the plan's Global Constraints
+ * for the full rationale.
+ */
+export class PossiblyExpiredSessionError extends EcoleDirecteApiError {
+  constructor(
+    message = "École Directe a renvoyé une réponse vide là où un objet ou un tableau était attendu — signe probable d'une session expirée (la librairie ne remonte pas le code d'erreur École Directe pour cet appel).",
+  ) {
+    super(0, message);
+    this.name = 'PossiblyExpiredSessionError';
+  }
+}
+
 export class AuthenticationRequiredError extends Error {
   constructor(
     message = "École Directe session expired and could not be refreshed automatically. Run `ecoledirecte-mcp login` again.",
@@ -47,7 +67,7 @@ export function mapErrorCode(code: number, message: string): EcoleDirecteApiErro
  * against a real expired token — see Task 16. A value that doesn't match
  * (no numeric `.code` or `.response.code`) returns `undefined`, so
  * `wrapCall` rethrows it completely unchanged rather than fabricating an
- * `EcoleDirecteApiError` — see the "rethrows ... unchanged" test above.
+ * `EcoleDirecteApiError`.
  */
 export function extractErrorCode(error: unknown): number | undefined {
   if (error && typeof error === 'object') {
@@ -59,6 +79,11 @@ export function extractErrorCode(error: unknown): number | undefined {
 }
 
 export function mapCaughtError(error: unknown): unknown {
+  // Already a typed error we (or the adapter) constructed on purpose — never
+  // re-map it through the numeric-code heuristic below, which would strip
+  // its specific identity (e.g. PossiblyExpiredSessionError has code 0, a
+  // sentinel, and would otherwise collapse into a generic EcoleDirecteApiError).
+  if (error instanceof EcoleDirecteApiError || error instanceof AuthenticationRequiredError) return error;
   const code = extractErrorCode(error);
   if (code === undefined) return error;
   return mapErrorCode(code, error instanceof Error ? error.message : String(error));
@@ -72,8 +97,29 @@ export async function wrapCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function withAutoRefresh(client: EcoleDirecteClient, sessionBox: SessionBox): EcoleDirecteClient {
+export interface WithAutoRefreshOptions {
+  /** How old (ms) a session may get before a call proactively refreshes it first. Default 15 minutes — a conservative guess, see Task 16. */
+  maxAgeMs?: number;
+  /** Injectable clock for tests. Defaults to Date.now. */
+  now?: () => number;
+}
+
+export function withAutoRefresh(
+  client: EcoleDirecteClient,
+  sessionBox: SessionBox,
+  options: WithAutoRefreshOptions = {},
+): EcoleDirecteClient {
+  const maxAgeMs = options.maxAgeMs ?? 15 * 60 * 1000;
+  const now = options.now ?? Date.now;
   let inFlightRefresh: Promise<Session> | null = null;
+
+  function isStale(session: Session): boolean {
+    return now() - new Date(session.updatedAt).getTime() > maxAgeMs;
+  }
+
+  function isRetriableError(error: unknown): boolean {
+    return error instanceof TokenExpiredError || error instanceof PossiblyExpiredSessionError;
+  }
 
   async function refreshOnce(staleSession: Session): Promise<Session> {
     const current = sessionBox.get();
@@ -95,20 +141,30 @@ export function withAutoRefresh(client: EcoleDirecteClient, sessionBox: SessionB
   }
 
   async function withRetry<T>(session: Session, fn: (session: Session) => Promise<T>): Promise<T> {
+    let currentSession = session;
+    if (isStale(currentSession)) {
+      try {
+        currentSession = await refreshOnce(currentSession);
+      } catch {
+        // Best-effort: a failed preventive refresh doesn't abort the call —
+        // proceed with the session we have. A genuine problem still surfaces
+        // via the reactive path below.
+      }
+    }
     try {
-      return await fn(session);
+      return await fn(currentSession);
     } catch (error) {
-      if (!(error instanceof TokenExpiredError)) throw error;
+      if (!isRetriableError(error)) throw error;
       let refreshed: Session;
       try {
-        refreshed = await refreshOnce(session);
+        refreshed = await refreshOnce(currentSession);
       } catch {
         throw new AuthenticationRequiredError();
       }
       try {
         return await fn(refreshed);
       } catch (retryError) {
-        if (retryError instanceof TokenExpiredError) throw new AuthenticationRequiredError();
+        if (isRetriableError(retryError)) throw new AuthenticationRequiredError();
         throw retryError;
       }
     }
@@ -127,7 +183,11 @@ export function withAutoRefresh(client: EcoleDirecteClient, sessionBox: SessionB
     getTimeline: (session) => withRetry(session, (s) => client.getTimeline(s)),
     downloadDocument: (session, fileId, fileType, destinationDir) =>
       withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir)),
-    getAuthStatus: (session) =>
-      session ? withRetry(session, (s) => client.getAuthStatus(s)) : client.getAuthStatus(session),
+    // getAuthStatus never touches the network (Task 6's adapter only reads
+    // local session fields for it), so it can never throw a retriable error.
+    // Wrapping it in withRetry would only add a pointless proactive-refresh
+    // side effect to what's meant to be a safe, always-available diagnostic
+    // call — the one tool that must work even when the session is bad.
+    getAuthStatus: (session) => client.getAuthStatus(session),
   };
 }
