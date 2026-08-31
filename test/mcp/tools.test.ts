@@ -54,3 +54,56 @@ describe('get_grades tool', () => {
     expect(fake.callCounts.getGrades).toBeUndefined();
   });
 });
+
+describe('get_homework tool', () => {
+  it('passes date range arguments through and returns homework as JSON', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.homework = [{ id: '42', subject: 'Mathématiques', dueDate: '2026-01-12', description: 'Ex 1-5', done: false }];
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({}),
+    });
+
+    const result = await mcpClient.callTool({
+      name: 'get_homework',
+      arguments: { fromDate: '2026-01-01', toDate: '2026-01-31' },
+    });
+
+    expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.homework);
+  });
+});
+
+describe('get_school_life tool', () => {
+  it('returns school life entries as JSON', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.schoolLife = [{ id: '1', type: 'Absence', date: '2026-01-10', description: 'Absence non justifiée', justified: false }];
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({}),
+    });
+
+    const result = await mcpClient.callTool({ name: 'get_school_life', arguments: {} });
+
+    expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.schoolLife);
+  });
+});
+
+describe('get_auth_status tool', () => {
+  it('reports sessionExists: false without erroring when no session is available', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => null, set: async () => {} },
+      config: loadConfig({}),
+    });
+
+    const result = await mcpClient.callTool({ name: 'get_auth_status', arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(textOf(result as { content: unknown }))).toMatchObject({ sessionExists: false });
+  });
+});
