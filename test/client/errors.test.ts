@@ -71,7 +71,8 @@ describe('withAutoRefresh', () => {
     fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
     fake.queueFailure('getHomework', new TokenExpiredError(525, 'expired'));
     fake.refreshedSession = makeSession({ accessToken: 'new-token' });
-    const box = createSessionBox(makeSession(), async () => {});
+    const persistCalls: string[] = [];
+    const box = createSessionBox(makeSession(), async (session) => { persistCalls.push(session.accessToken); });
     const client = withAutoRefresh(fake, box);
 
     await Promise.all([
@@ -80,6 +81,7 @@ describe('withAutoRefresh', () => {
     ]);
 
     expect(fake.callCounts.refreshSession).toBe(1);
+    expect(persistCalls).toEqual(['new-token']);
   });
 
   it('reuses an already-fresher session from the box instead of refreshing again', async () => {

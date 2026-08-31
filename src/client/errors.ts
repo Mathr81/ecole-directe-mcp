@@ -81,13 +81,17 @@ export function withAutoRefresh(client: EcoleDirecteClient, sessionBox: SessionB
       return current;
     }
     if (!inFlightRefresh) {
-      inFlightRefresh = client.refreshSession(staleSession).finally(() => {
-        inFlightRefresh = null;
-      });
+      inFlightRefresh = client
+        .refreshSession(staleSession)
+        .then(async (refreshed) => {
+          await sessionBox.set(refreshed);
+          return refreshed;
+        })
+        .finally(() => {
+          inFlightRefresh = null;
+        });
     }
-    const refreshed = await inFlightRefresh;
-    await sessionBox.set(refreshed);
-    return refreshed;
+    return inFlightRefresh;
   }
 
   async function withRetry<T>(session: Session, fn: (session: Session) => Promise<T>): Promise<T> {
