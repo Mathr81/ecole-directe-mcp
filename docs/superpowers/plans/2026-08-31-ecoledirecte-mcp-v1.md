@@ -66,6 +66,36 @@ run the smoke-test script).
   refreshing again; if refresh also fails, throw
   `AuthenticationRequiredError` telling the user to re-run
   `ecoledirecte-mcp login` — never loop.
+- **Session refresh is two complementary mechanisms, not just reactive
+  retry** (added after Task 6's review found the mechanism above is
+  unreachable for most calls — see Task 4's Amendment and Task 6's
+  Amendment below for the full story):
+  1. **Preventive** — `withAutoRefresh` proactively refreshes a session
+     older than `SESSION_MAX_AGE_MS` (env var, default 15 minutes — a
+     conservative guess pending real-world calibration via Task 16)
+     before attempting a call, reusing the same in-flight dedup as the
+     reactive path. A failed preventive refresh is non-fatal: the call
+     proceeds with the session it has, and a genuine problem still
+     surfaces via the reactive path below.
+  2. **Reactive-structural** — `@blockshub/blocksdirecte`'s data-fetching
+     methods (everything except login/refresh/2FA) never throw a typed
+     error on an expired token: École Directe's numeric error `code` is
+     discarded inside the library before it reaches the adapter, for
+     these methods only. So `blocksDirecteAdapter.ts` asserts the raw
+     result isn't `null`/`undefined` wherever the library structurally
+     guarantees an object or array, throwing `PossiblyExpiredSessionError`
+     if it is — treated identically to `TokenExpiredError` by
+     `withAutoRefresh` (one refresh, one retry, else
+     `AuthenticationRequiredError`, never a loop). A **legitimately
+     empty** result (`[]`, `{}`) is never treated as a staleness signal —
+     only a missing one.
+  3. Anything neither mechanism catches (e.g. `markHomeworkDone`, a write
+     call with no return data to inspect) surfaces as a plain, explicit
+     error telling the user to re-run `login` — a documented, accepted V1
+     limitation (see Task 16's README section), not silently swallowed.
+  4. **No fork of `@blockshub/blocksdirecte`** to fix this at the source —
+     maintaining a patched copy of an already-alpha dependency was judged
+     not worth it for a personal-use V1.
 - `messaging.ts` / a `get_messages` tool are explicitly **out of scope for
   this plan** — the spec requires verifying the real request contract
   (against `ecoledirecte-api-docs` and the user's "Mon ÉcoleDirecte"
@@ -1175,6 +1205,358 @@ git commit -m "feat: error mapping, wrapCall, and refresh-once retry decorator"
 
 ---
 
+### Amendment: preventive refresh + `PossiblyExpiredSessionError` (added after Task 6's review)
+
+**Why this exists:** Task 6's review traced the actual compiled
+`@blockshub/blocksdirecte` runtime and found that `AuthModules`
+(login/refresh/2FA) is the *only* part of the library that inspects
+École Directe's numeric `code` field — every data-fetching method
+(`getMark`, `getUpcomingHomework`, `getHomeworksForDate`,
+`getTimetableBetweenDates`, `getSchoolLife`, `getClassLife`,
+`getPersonalTimeline`) does `return (await this.restManager.post(...)).data`
+with no check at all, and `code`/`message` are discarded before ever
+reaching the adapter — confirmed by reading the library's source
+directly, not inferred. So on an expired token, these methods don't
+throw — they silently return `null`/`undefined` where a real response
+would have been an object or array. The original `wrapCall` design
+(Global Constraints, above) can only convert *thrown* errors carrying a
+numeric code; it has nothing to catch here. Two mechanisms replace the
+single reactive one:
+
+1. **Preventive, age-based refresh** — added to `withAutoRefresh` itself,
+   below.
+2. **A new typed error, `PossiblyExpiredSessionError`**, thrown by the
+   adapter (Task 6's Amendment) when a data call's raw result is
+   `null`/`undefined` where the library structurally guarantees an
+   object or array — treated identically to `TokenExpiredError` here.
+
+- [ ] **Step 6: Modify the existing tests in `test/client/errors.test.ts`**
+
+Add `PossiblyExpiredSessionError` and `createSessionBox` (if not already
+imported — check first) to the existing import from
+`'../../src/client/errors.js'` and `'../../src/client/sessionBox.js'`
+respectively. Then, in every one of the 5 existing `describe('withAutoRefresh', ...)`
+tests, change the construction line from:
+
+```typescript
+const client = withAutoRefresh(fake, box);
+```
+
+to:
+
+```typescript
+const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
+```
+
+This opts every existing test out of the new preventive-refresh behavior
+(so they keep testing reactive-only behavior, unchanged in intent) —
+without this change, `makeSession()`'s fixed `updatedAt` of
+`2026-01-01T00:00:00.000Z` would already be "stale" relative to the real
+current clock, breaking every one of these tests' assertions.
+
+- [ ] **Step 7: Append new failing tests to `test/client/errors.test.ts`**
+
+```typescript
+describe('withAutoRefresh — preventive age-based refresh', () => {
+  it('proactively refreshes a session older than maxAgeMs before calling fn', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const staleSession = makeSession({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    fake.refreshedSession = makeSession({ accessToken: 'new-token', updatedAt: '2026-01-01T00:10:00.000Z' });
+    const box = createSessionBox(staleSession, async () => {});
+    const now = () => new Date('2026-01-01T00:30:00.000Z').getTime();
+    const client = withAutoRefresh(fake, box, { maxAgeMs: 15 * 60 * 1000, now });
+
+    await client.getGrades(staleSession);
+
+    expect(fake.callCounts.refreshSession).toBe(1);
+  });
+
+  it('does not proactively refresh a session younger than maxAgeMs', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const freshSession = makeSession({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    const box = createSessionBox(freshSession, async () => {});
+    const now = () => new Date('2026-01-01T00:05:00.000Z').getTime();
+    const client = withAutoRefresh(fake, box, { maxAgeMs: 15 * 60 * 1000, now });
+
+    await client.getGrades(freshSession);
+
+    expect(fake.callCounts.refreshSession).toBeUndefined();
+  });
+
+  it('proceeds with the call when a preventive refresh fails, instead of aborting', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const staleSession = makeSession({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    fake.queueFailure('refreshSession', new Error('network blip'));
+    const box = createSessionBox(staleSession, async () => {});
+    const now = () => new Date('2026-01-01T00:30:00.000Z').getTime();
+    const client = withAutoRefresh(fake, box, { maxAgeMs: 15 * 60 * 1000, now });
+
+    const grades = await client.getGrades(staleSession);
+
+    expect(grades).toEqual(fake.grades);
+    expect(fake.callCounts.refreshSession).toBe(1);
+  });
+
+  it('never refreshes for getAuthStatus, even with a stale session', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const staleSession = makeSession({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    const box = createSessionBox(staleSession, async () => {});
+    const now = () => new Date('2026-01-01T00:30:00.000Z').getTime();
+    const client = withAutoRefresh(fake, box, { maxAgeMs: 15 * 60 * 1000, now });
+
+    await client.getAuthStatus(staleSession);
+
+    expect(fake.callCounts.refreshSession).toBeUndefined();
+  });
+});
+
+describe('withAutoRefresh — PossiblyExpiredSessionError', () => {
+  it('treats PossiblyExpiredSessionError the same as TokenExpiredError for reactive retry', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.queueFailure('getGrades', new PossiblyExpiredSessionError());
+    fake.refreshedSession = makeSession({ accessToken: 'new-token' });
+    const box = createSessionBox(makeSession(), async () => {});
+    const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
+
+    const grades = await client.getGrades(box.get()!);
+
+    expect(grades).toEqual(fake.grades);
+    expect(fake.callCounts.refreshSession).toBe(1);
+  });
+});
+
+describe('wrapCall — already-typed errors', () => {
+  it('does not re-map an already-typed EcoleDirecteApiError — instanceof identity survives', async () => {
+    await expect(
+      wrapCall(async () => {
+        throw new PossiblyExpiredSessionError();
+      }),
+    ).rejects.toBeInstanceOf(PossiblyExpiredSessionError);
+  });
+});
+```
+
+- [ ] **Step 8: Run tests to verify they fail**
+
+Run: `npx vitest run test/client/errors.test.ts`
+Expected: FAIL — `PossiblyExpiredSessionError`/new `withAutoRefresh`
+options are not exported/supported yet.
+
+- [ ] **Step 9: Replace the entire contents of `src/client/errors.ts`**
+
+```typescript
+import type { SessionBox } from './sessionBox.js';
+import type { EcoleDirecteClient, Session } from './types.js';
+
+export class EcoleDirecteApiError extends Error {
+  readonly code: number;
+  constructor(code: number, message: string) {
+    super(message);
+    this.name = 'EcoleDirecteApiError';
+    this.code = code;
+  }
+}
+
+export class InvalidCredentialsError extends EcoleDirecteApiError {}
+export class TokenExpiredError extends EcoleDirecteApiError {}
+export class SchoolUnavailableError extends EcoleDirecteApiError {}
+export class InvalidTwoFactorAnswerError extends EcoleDirecteApiError {}
+
+/**
+ * Thrown by the adapter (Task 6) when a BlocksDirecte data method returns
+ * null/undefined where it structurally guarantees an object or array — the
+ * one observable symptom of an expired token for those methods, since
+ * @blockshub/blocksdirecte discards École Directe's numeric error code
+ * before it reaches the adapter for anything other than login/refresh/2FA.
+ * Treated identically to TokenExpiredError by withAutoRefresh. Do not
+ * remove this as "unreachable defensive code" — it is the only signal
+ * available for 8 of the 9 data methods. See the plan's Global Constraints
+ * for the full rationale.
+ */
+export class PossiblyExpiredSessionError extends EcoleDirecteApiError {
+  constructor(
+    message = "École Directe a renvoyé une réponse vide là où un objet ou un tableau était attendu — signe probable d'une session expirée (la librairie ne remonte pas le code d'erreur École Directe pour cet appel).",
+  ) {
+    super(0, message);
+    this.name = 'PossiblyExpiredSessionError';
+  }
+}
+
+export class AuthenticationRequiredError extends Error {
+  constructor(
+    message = "École Directe session expired and could not be refreshed automatically. Run `ecoledirecte-mcp login` again.",
+  ) {
+    super(message);
+    this.name = 'AuthenticationRequiredError';
+  }
+}
+
+export function mapErrorCode(code: number, message: string): EcoleDirecteApiError {
+  switch (code) {
+    case 505:
+      return new InvalidCredentialsError(code, message);
+    case 520:
+    case 525:
+      return new TokenExpiredError(code, message);
+    case 535:
+      return new SchoolUnavailableError(code, message);
+    default:
+      return new EcoleDirecteApiError(code, message);
+  }
+}
+
+/**
+ * Duck-types a thrown value for a numeric error code — this file has no
+ * import from @blockshub/blocksdirecte and does not know the real shape
+ * of what a failed data call throws (unlike ServerResponse<T>, which is
+ * a *success*-path type seen in the library's .d.ts and isn't otherwise
+ * relevant here). This is a guess at a plausible shape, unverified
+ * against a real expired token — see Task 16. A value that doesn't match
+ * (no numeric `.code` or `.response.code`) returns `undefined`, so
+ * `wrapCall` rethrows it completely unchanged rather than fabricating an
+ * `EcoleDirecteApiError`.
+ */
+export function extractErrorCode(error: unknown): number | undefined {
+  if (error && typeof error === 'object') {
+    const withCode = error as { code?: unknown; response?: { code?: unknown } };
+    if (typeof withCode.code === 'number') return withCode.code;
+    if (typeof withCode.response?.code === 'number') return withCode.response.code;
+  }
+  return undefined;
+}
+
+export function mapCaughtError(error: unknown): unknown {
+  // Already a typed error we (or the adapter) constructed on purpose — never
+  // re-map it through the numeric-code heuristic below, which would strip
+  // its specific identity (e.g. PossiblyExpiredSessionError has code 0, a
+  // sentinel, and would otherwise collapse into a generic EcoleDirecteApiError).
+  if (error instanceof EcoleDirecteApiError || error instanceof AuthenticationRequiredError) return error;
+  const code = extractErrorCode(error);
+  if (code === undefined) return error;
+  return mapErrorCode(code, error instanceof Error ? error.message : String(error));
+}
+
+export async function wrapCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    throw mapCaughtError(error);
+  }
+}
+
+export interface WithAutoRefreshOptions {
+  /** How old (ms) a session may get before a call proactively refreshes it first. Default 15 minutes — a conservative guess, see Task 16. */
+  maxAgeMs?: number;
+  /** Injectable clock for tests. Defaults to Date.now. */
+  now?: () => number;
+}
+
+export function withAutoRefresh(
+  client: EcoleDirecteClient,
+  sessionBox: SessionBox,
+  options: WithAutoRefreshOptions = {},
+): EcoleDirecteClient {
+  const maxAgeMs = options.maxAgeMs ?? 15 * 60 * 1000;
+  const now = options.now ?? Date.now;
+  let inFlightRefresh: Promise<Session> | null = null;
+
+  function isStale(session: Session): boolean {
+    return now() - new Date(session.updatedAt).getTime() > maxAgeMs;
+  }
+
+  function isRetriableError(error: unknown): boolean {
+    return error instanceof TokenExpiredError || error instanceof PossiblyExpiredSessionError;
+  }
+
+  async function refreshOnce(staleSession: Session): Promise<Session> {
+    const current = sessionBox.get();
+    if (current && current.accessToken !== staleSession.accessToken) {
+      return current;
+    }
+    if (!inFlightRefresh) {
+      inFlightRefresh = client
+        .refreshSession(staleSession)
+        .then(async (refreshed) => {
+          await sessionBox.set(refreshed);
+          return refreshed;
+        })
+        .finally(() => {
+          inFlightRefresh = null;
+        });
+    }
+    return inFlightRefresh;
+  }
+
+  async function withRetry<T>(session: Session, fn: (session: Session) => Promise<T>): Promise<T> {
+    let currentSession = session;
+    if (isStale(currentSession)) {
+      try {
+        currentSession = await refreshOnce(currentSession);
+      } catch {
+        // Best-effort: a failed preventive refresh doesn't abort the call —
+        // proceed with the session we have. A genuine problem still surfaces
+        // via the reactive path below.
+      }
+    }
+    try {
+      return await fn(currentSession);
+    } catch (error) {
+      if (!isRetriableError(error)) throw error;
+      let refreshed: Session;
+      try {
+        refreshed = await refreshOnce(currentSession);
+      } catch {
+        throw new AuthenticationRequiredError();
+      }
+      try {
+        return await fn(refreshed);
+      } catch (retryError) {
+        if (isRetriableError(retryError)) throw new AuthenticationRequiredError();
+        throw retryError;
+      }
+    }
+  }
+
+  return {
+    login: (credentials) => client.login(credentials),
+    completeTwoFactor: (challenge, answer, credentials) => client.completeTwoFactor(challenge, answer, credentials),
+    refreshSession: (session) => client.refreshSession(session),
+    getGrades: (session, schoolYear) => withRetry(session, (s) => client.getGrades(s, schoolYear)),
+    getHomework: (session, fromDate, toDate) => withRetry(session, (s) => client.getHomework(s, fromDate, toDate)),
+    markHomeworkDone: (session, homeworkId, done) => withRetry(session, (s) => client.markHomeworkDone(s, homeworkId, done)),
+    getTimetable: (session, fromDate, toDate) => withRetry(session, (s) => client.getTimetable(s, fromDate, toDate)),
+    getSchoolLife: (session) => withRetry(session, (s) => client.getSchoolLife(s)),
+    getClassLife: (session) => withRetry(session, (s) => client.getClassLife(s)),
+    getTimeline: (session) => withRetry(session, (s) => client.getTimeline(s)),
+    downloadDocument: (session, fileId, fileType, destinationDir) =>
+      withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir)),
+    // getAuthStatus never touches the network (Task 6's adapter only reads
+    // local session fields for it), so it can never throw a retriable error.
+    // Wrapping it in withRetry would only add a pointless proactive-refresh
+    // side effect to what's meant to be a safe, always-available diagnostic
+    // call — the one tool that must work even when the session is bad.
+    getAuthStatus: (session) => client.getAuthStatus(session),
+  };
+}
+```
+
+- [ ] **Step 10: Run tests to verify they pass**
+
+Run: `npx vitest run test/client/errors.test.ts`
+Expected: PASS (14 tests: 4 `wrapCall` + 5 original `withAutoRefresh` +
+4 preventive-refresh + 1 `PossiblyExpiredSessionError` reactive).
+
+Run: `npm test` (full suite) — confirm nothing in Tasks 1-5 regressed.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add src/client/errors.ts test/client/errors.test.ts
+git commit -m "feat: preventive age-based refresh and PossiblyExpiredSessionError"
+```
+
+---
+
 ## Task 5: Pure BlocksDirecte → DTO mappers
 
 **Context for the implementer:** `@blockshub/blocksdirecte`'s bundled
@@ -1938,6 +2320,142 @@ git add src/client/blocksDirecteAdapter.ts
 git commit -m "feat: BlocksDirecte adapter for EcoleDirecteClient"
 ```
 
+### Amendment: structural null/undefined guard (added after review)
+
+**Why:** confirmed by reading `@blockshub/blocksdirecte`'s compiled
+source directly — `getMark`, `getUpcomingHomework`,
+`getHomeworksForDate`, `getTimetableBetweenDates`, `getSchoolLife`,
+`getClassLife`, and `getPersonalTimeline` all do
+`return (await this.restManager.post(...)).data` with **no check at
+all** on the response. On an expired token, École Directe's numeric
+`code` lives on the *outer* response object; these methods discard
+everything except `.data` before returning, so the code never reaches
+this adapter. The one observable symptom is `.data` coming back
+`null`/`undefined` instead of the object/array the type signature
+promises. Without a guard, that flows straight into a mapper (Task 5)
+and throws a generic, unrecognized `TypeError` — `wrapCall` correctly
+leaves it unmapped (nothing about a `TypeError` says "token expired"),
+so `withAutoRefresh` never retries.
+
+This guard is deliberately **strict**: it only fires on `null`/`undefined`,
+never on a legitimately empty array (`[]`) or object (`{}`) — a school
+with no homework today, or a subject with no grades yet, is a normal,
+valid response and must not trigger a refresh.
+
+`downloader.getStream` is **not** covered by this guard — its own type
+signature already returns `ReadableStream | null`, meaning the library
+itself treats `null` as a documented possible outcome (e.g. file not
+found), not something this adapter can distinguish from "token expired"
+the way it can for the other 7 methods. It keeps its existing plain
+`Error` on `null`.
+
+- [ ] **Step 4: Add the `assertPresent` helper and apply it to the 7 methods that need it**
+
+Replace the existing `import { InvalidCredentialsError, InvalidTwoFactorAnswerError, mapCaughtError, wrapCall } from './errors.js';`
+line at the top of `src/client/blocksDirecteAdapter.ts` with (adds
+`PossiblyExpiredSessionError` — everything else on the line is
+unchanged):
+
+```typescript
+import { InvalidCredentialsError, InvalidTwoFactorAnswerError, PossiblyExpiredSessionError, mapCaughtError, wrapCall } from './errors.js';
+```
+
+Add this helper function near the top of the file, after the type
+aliases and before `credentialCache`:
+
+```typescript
+function assertPresent<T>(value: T | null | undefined, context: string): T {
+  if (value === null || value === undefined) {
+    throw new PossiblyExpiredSessionError(
+      `École Directe (${context}) a renvoyé une réponse vide — session probablement expirée.`,
+    );
+  }
+  return value;
+}
+```
+
+Then wrap the raw library result in `assertPresent` in these 7 methods
+(the file's other methods — `login`, `completeTwoFactor`, `refreshSession`,
+`markHomeworkDone`, `downloadDocument`, `getAuthStatus` — are unchanged):
+
+```typescript
+    async getGrades(session, schoolYear) {
+      return wrapCall(async () => {
+        const client = await ensureClient(session);
+        const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
+        return mapGrades(marks.notes);
+      });
+    },
+
+    async getHomework(session, fromDate, toDate) {
+      return wrapCall(async () => {
+        const client = await ensureClient(session);
+        const upcoming = assertPresent(await client.homework.getUpcomingHomework(), 'getUpcomingHomework');
+        const dates = Object.keys(upcoming).filter((date) => date >= fromDate && date <= toDate);
+        const perDate: Array<{ date: string; response: Awaited<ReturnType<typeof client.homework.getHomeworksForDate>> }> = [];
+        for (const date of dates) {
+          const response = assertPresent(await client.homework.getHomeworksForDate(date), 'getHomeworksForDate');
+          perDate.push({ date, response });
+        }
+        return mapHomework(perDate);
+      });
+    },
+
+    async getTimetable(session, fromDate, toDate) {
+      return wrapCall(async () => {
+        const client = await ensureClient(session);
+        const courses = assertPresent(
+          await client.timetable.getTimetableBetweenDates(new Date(fromDate), new Date(toDate)),
+          'getTimetableBetweenDates',
+        );
+        return mapTimetable(courses);
+      });
+    },
+
+    async getSchoolLife(session) {
+      return wrapCall(async () => {
+        const client = await ensureClient(session);
+        return mapSchoolLife(assertPresent(await client.schoollife.getSchoolLife(), 'getSchoolLife'));
+      });
+    },
+
+    async getClassLife(session) {
+      return wrapCall(async () => {
+        const client = await ensureClient(session);
+        return mapClassLife(assertPresent(await client.classlife.getClassLife(), 'getClassLife'));
+      });
+    },
+
+    async getTimeline(session) {
+      return wrapCall(async () => {
+        const client = await ensureClient(session);
+        return mapTimeline(assertPresent(await client.timeline.getPersonalTimeline(), 'getPersonalTimeline'));
+      });
+    },
+```
+
+Note: `assertPresent` throws inside the `wrapCall(async () => {...})`
+callback, so it's still covered by `wrapCall`'s try/catch — but since
+`PossiblyExpiredSessionError` is already an `EcoleDirecteApiError`
+instance, `mapCaughtError`'s new already-typed-error guard (Task 4's
+Amendment) means `wrapCall` rethrows it unchanged rather than trying to
+re-map it through `extractErrorCode`.
+
+- [ ] **Step 5: Type-check**
+
+Run: `npm run build && npm run typecheck`
+Expected: both succeed with no errors.
+
+Run: `npm test` (full suite) — confirm nothing in Tasks 1-5 (including
+Task 4's Amendment) regressed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/client/blocksDirecteAdapter.ts
+git commit -m "feat: guard adapter data methods against null/undefined on expired sessions"
+```
+
 ---
 
 ## Task 7: Caching + serialization decorator
@@ -2139,10 +2657,14 @@ git commit -m "feat: TTL cache with mutation invalidation, in-flight dedupe, ser
 
 **Files:**
 - Modify: `src/config.ts` (replace the Task 1 placeholder)
+- Modify: `.env.example` (add `SESSION_MAX_AGE_MS`, see Step 3a below)
 - Test: `test/config.test.ts`
 
 **Interfaces:**
 - Produces: `Config`, `loadConfig(env?): Config` — consumed by Tasks 11, 12, 13, 14.
+  `Config.sessionMaxAgeMs` feeds `withAutoRefresh`'s preventive-refresh
+  threshold (Task 4's Amendment), threaded through by Task 9's
+  `createClient`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2157,11 +2679,22 @@ describe('loadConfig', () => {
     expect(config.readOnly).toBe(false);
     expect(config.sessionPath).toContain('ecoledirecte-mcp');
     expect(config.downloadDir).toContain('ecoledirecte-mcp');
+    expect(config.sessionMaxAgeMs).toBe(15 * 60 * 1000);
   });
 
   it('applies overrides from env vars', () => {
-    const config = loadConfig({ SESSION_PATH: '/tmp/s.json', DOWNLOAD_DIR: '/tmp/dl', READ_ONLY: 'true' });
-    expect(config).toEqual({ sessionPath: '/tmp/s.json', downloadDir: '/tmp/dl', readOnly: true });
+    const config = loadConfig({
+      SESSION_PATH: '/tmp/s.json',
+      DOWNLOAD_DIR: '/tmp/dl',
+      READ_ONLY: 'true',
+      SESSION_MAX_AGE_MS: '600000',
+    });
+    expect(config).toEqual({
+      sessionPath: '/tmp/s.json',
+      downloadDir: '/tmp/dl',
+      readOnly: true,
+      sessionMaxAgeMs: 600000,
+    });
   });
 
   it.each([
@@ -2172,6 +2705,16 @@ describe('loadConfig', () => {
   ])('parses READ_ONLY=%s as %s', (raw, expected) => {
     const config = loadConfig(raw === undefined ? {} : { READ_ONLY: raw });
     expect(config.readOnly).toBe(expected);
+  });
+
+  it.each([
+    [undefined, 15 * 60 * 1000],
+    ['600000', 600000],
+    ['not-a-number', 15 * 60 * 1000],
+    ['-5', 15 * 60 * 1000],
+  ])('parses SESSION_MAX_AGE_MS=%s as %s (falls back to the default on anything non-positive or unparseable)', (raw, expected) => {
+    const config = loadConfig(raw === undefined ? {} : { SESSION_MAX_AGE_MS: raw });
+    expect(config.sessionMaxAgeMs).toBe(expected);
   });
 });
 ```
@@ -2192,11 +2735,20 @@ export interface Config {
   sessionPath: string;
   downloadDir: string;
   readOnly: boolean;
+  sessionMaxAgeMs: number;
 }
+
+const DEFAULT_SESSION_MAX_AGE_MS = 15 * 60 * 1000;
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
   if (raw === undefined) return fallback;
   return raw === 'true' || raw === '1';
+}
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -2204,19 +2756,32 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionPath: env.SESSION_PATH ?? defaultSessionPath(),
     downloadDir: env.DOWNLOAD_DIR ?? join(homedir(), '.local', 'share', 'ecoledirecte-mcp', 'downloads'),
     readOnly: parseBoolean(env.READ_ONLY, false),
+    sessionMaxAgeMs: parsePositiveInt(env.SESSION_MAX_AGE_MS, DEFAULT_SESSION_MAX_AGE_MS),
   };
 }
+```
+
+- [ ] **Step 3a: Add `SESSION_MAX_AGE_MS` to `.env.example`**
+
+Append this to the existing file (current content: `SESSION_PATH`,
+`DOWNLOAD_DIR`, `READ_ONLY` — leave those three untouched):
+
+```
+# Millisecondes avant de rafraîchir la session par précaution, même sans erreur
+# (par défaut: 900000 = 15 min — valeur conservatrice, à ajuster une fois la vraie
+# durée de vie du token observée, voir le smoke test)
+SESSION_MAX_AGE_MS=
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run test/config.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (10 tests: 2 + 4 READ_ONLY cases + 4 SESSION_MAX_AGE_MS cases).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/config.ts test/config.test.ts
+git add src/config.ts .env.example test/config.test.ts
 git commit -m "feat: env-based config parsing"
 ```
 
@@ -2234,9 +2799,13 @@ just wiring the two decorators together.
 
 **Interfaces:**
 - Consumes: `EcoleDirecteClient`, `SessionBox`, `createSessionBox` (Task 2);
-  `withAutoRefresh` (Task 4); `createCachingClient` (Task 7);
-  `FakeEcoleDirecteClient`, `makeSession`, `TokenExpiredError`.
-- Produces: `createClient(base, sessionBox)` — consumed by Tasks 14, 16.
+  `withAutoRefresh`, `WithAutoRefreshOptions`, `TokenExpiredError` (Task 4,
+  including its Amendment); `createCachingClient` (Task 7);
+  `FakeEcoleDirecteClient`, `makeSession`.
+- Produces: `createClient(base, sessionBox, options?)` — consumed by
+  Tasks 14, 16. `options.sessionMaxAgeMs` (from `Config.sessionMaxAgeMs`,
+  Task 8) threads through to `withAutoRefresh`'s preventive-refresh
+  threshold.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2254,7 +2823,7 @@ describe('createClient', () => {
     fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
     fake.refreshedSession = makeSession({ accessToken: 'new-token' });
     const box = createSessionBox(makeSession(), async () => {});
-    const client = createClient(fake, box);
+    const client = createClient(fake, box, { sessionMaxAgeMs: Number.POSITIVE_INFINITY });
 
     await client.getGrades(box.get()!);
 
@@ -2264,15 +2833,37 @@ describe('createClient', () => {
   it('applies caching on top of retry', async () => {
     const fake = new FakeEcoleDirecteClient();
     const box = createSessionBox(makeSession(), async () => {});
-    const client = createClient(fake, box);
+    const client = createClient(fake, box, { sessionMaxAgeMs: Number.POSITIVE_INFINITY });
 
     await client.getGrades(box.get()!);
     await client.getGrades(box.get()!);
 
     expect(fake.callCounts.getGrades).toBe(1);
   });
+
+  it('threads sessionMaxAgeMs through to the preventive-refresh mechanism', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    const staleSession = makeSession({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    fake.refreshedSession = makeSession({ accessToken: 'new-token', updatedAt: '2026-01-01T00:10:00.000Z' });
+    const box = createSessionBox(staleSession, async () => {});
+    const client = createClient(fake, box, {
+      sessionMaxAgeMs: 15 * 60 * 1000,
+      now: () => new Date('2026-01-01T00:30:00.000Z').getTime(),
+    });
+
+    await client.getGrades(box.get()!);
+
+    expect(fake.callCounts.refreshSession).toBe(1);
+    expect(box.get()!.accessToken).toBe('new-token');
+  });
 });
 ```
+
+Note: the first two tests pass `sessionMaxAgeMs: Number.POSITIVE_INFINITY`
+for the same reason Task 4's existing tests do — `makeSession()`'s fixed
+`updatedAt` would otherwise register as stale against a real clock and
+trigger an unwanted preventive refresh, which isn't what those two tests
+are about.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2283,19 +2874,30 @@ Expected: FAIL — `Cannot find module '../../src/client/createClient.js'`.
 
 ```typescript
 import { createCachingClient } from './cachingClient.js';
-import { withAutoRefresh } from './errors.js';
+import { withAutoRefresh, type WithAutoRefreshOptions } from './errors.js';
 import type { SessionBox } from './sessionBox.js';
 import type { EcoleDirecteClient } from './types.js';
 
-export function createClient(base: EcoleDirecteClient, sessionBox: SessionBox): EcoleDirecteClient {
-  return createCachingClient(withAutoRefresh(base, sessionBox));
+export interface CreateClientOptions {
+  sessionMaxAgeMs?: number;
+  /** Injectable clock, tests only — forwarded to withAutoRefresh. */
+  now?: () => number;
+}
+
+export function createClient(
+  base: EcoleDirecteClient,
+  sessionBox: SessionBox,
+  options: CreateClientOptions = {},
+): EcoleDirecteClient {
+  const refreshOptions: WithAutoRefreshOptions = { maxAgeMs: options.sessionMaxAgeMs, now: options.now };
+  return createCachingClient(withAutoRefresh(base, sessionBox, refreshOptions));
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run test/client/createClient.test.ts`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -3257,7 +3859,7 @@ async function runServeCommand(useHttp: boolean): Promise<void> {
   }
 
   const sessionBox = createSessionBox(initialSession, (session) => writeSession(session, config.sessionPath));
-  const client = createClient(base, sessionBox);
+  const client = createClient(base, sessionBox, { sessionMaxAgeMs: config.sessionMaxAgeMs });
   await startStdioServer({ client, sessionBox, config });
 }
 
@@ -3395,9 +3997,11 @@ git commit -m "ci: build and test workflow"
 import { createBlocksDirecteClient } from '../src/client/blocksDirecteAdapter.js';
 import { createClient } from '../src/client/createClient.js';
 import { createSessionBox } from '../src/client/sessionBox.js';
+import { loadConfig } from '../src/config.js';
 import { readSession, resolveSessionPath, writeSession } from '../src/store/sessionStore.js';
 
 async function main(): Promise<void> {
+  const config = loadConfig();
   const session = await readSession();
   if (!session) throw new Error('Run `ecoledirecte-mcp login` first.');
 
@@ -3405,7 +4009,7 @@ async function main(): Promise<void> {
   const refreshed = await base.refreshSession(session);
   await writeSession(refreshed);
   const sessionBox = createSessionBox(refreshed, (s) => writeSession(s));
-  const client = createClient(base, sessionBox);
+  const client = createClient(base, sessionBox, { sessionMaxAgeMs: config.sessionMaxAgeMs });
   // sessionBox was just seeded with `refreshed` (non-null) above, and nothing in
   // this single-shot script can clear it — safe to assert non-null on every read.
   const currentSession = () => sessionBox.get()!;
@@ -3465,6 +4069,23 @@ Le `deviceUUID` généré au premier `login` est stocké séparément, dans
 pas le supprimer entre deux logins, sous peine de redéclencher le QCM à
 chaque fois.
 
+## Limitations connues (V1)
+
+**Expiration de session en cours d'utilisation.** Le serveur rafraîchit
+la session de façon préventive si elle a plus de `SESSION_MAX_AGE_MS`
+(15 minutes par défaut) sans avoir été rafraîchie, et détecte aussi
+certains signes d'expiration sur les appels de lecture (réponse vide là
+où École Directe en garantit normalement une) pour déclencher un
+rafraîchissement + une nouvelle tentative — un seul essai, jamais de
+boucle. Mais la librairie `@blockshub/blocksdirecte` ne remonte pas
+toujours un code d'erreur exploitable pour les appels de données (notes,
+devoirs, emploi du temps, etc.) : seuls les appels d'authentification le
+font. Si aucun des deux mécanismes ci-dessus ne suffit (par exemple une
+écriture comme `mark_homework_done`, dont la réponse ne contient rien à
+inspecter), un outil peut renvoyer une erreur d'authentification claire
+au lieu de réussir automatiquement : relance `ecoledirecte-mcp login`
+dans ce cas.
+
 ## Statut
 
 V1 : usage local uniquement (transport stdio). Le transport HTTP
@@ -3490,9 +4111,11 @@ resolved for real. Note any mismatches for a quick follow-up fix.
 
 - [ ] **Step 4: Verify the `wrapCall`/`mapErrorCode` guess against a real expired token**
 
-This closes the loop on Task 4's documented uncertainty: `extractErrorCode`
-guesses that a failed BlocksDirecte data call carries a numeric `code`
-(top-level or under `.response.code`). To check this for real: edit
+`extractErrorCode` guesses that a failed BlocksDirecte *auth* call
+(login/refresh/2FA — the only ones that actually check École Directe's
+numeric `code`, confirmed by reading the library's source during Task
+6's Amendment) carries that code as a `.code` or `.response.code`
+property on the thrown value. To check this for real: edit
 `~/.config/ecoledirecte-mcp/session.json`, corrupt `accessToken` to an
 obviously invalid string, then run `npm run smoke-test` again.
 
@@ -3500,13 +4123,49 @@ Expected: the call should trigger `withAutoRefresh`'s retry path — you'll
 see it succeed anyway (after a silent refresh) because `refreshSession`
 doesn't depend on the corrupted `accessToken` alone (it also carries
 `cnKey`/`cvKey`/`deviceUUID`). If it instead throws an unhandled/raw
-error, `extractErrorCode`'s heuristic doesn't match what BlocksDirecte
-actually throws for this case — inspect the real error object (add a
-temporary `console.error(error)` in `wrapCall`) and adjust
+error, `extractErrorCode`'s heuristic doesn't match what
+`AuthModules.refreshToken` actually throws — inspect the real error
+object (add a temporary `console.error(error)` in `wrapCall`) and adjust
 `extractErrorCode` in `src/client/errors.ts` accordingly, then re-run the
 Task 4 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Calibrate `SESSION_MAX_AGE_MS` against the real token lifetime**
+
+The 15-minute default (Task 8) is a conservative guess — nothing in
+École Directe's documentation states the real token TTL. Over normal use
+across a few days, call `get_auth_status` periodically (or watch its
+`lastRefreshAt`) and note how long a session actually stays valid before
+a data call starts needing the reactive-retry path (i.e. before
+`PossiblyExpiredSessionError` starts firing — add a temporary
+`console.error` in `assertPresent`, Task 6's Amendment, to notice this
+without digging through logs). Once the real lifetime is known, update
+the default in `src/config.ts`'s `DEFAULT_SESSION_MAX_AGE_MS` (and this
+README's env var table) to something comfortably under it — e.g. half
+the observed TTL — rather than leaving the untested 15-minute guess as
+the shipped default.
+
+- [ ] **Step 6: Confirm the null/undefined assumption behind `PossiblyExpiredSessionError`**
+
+Task 6's Amendment assumes an expired token makes BlocksDirecte's data
+methods (`getMark`, `getUpcomingHomework`, `getHomeworksForDate`,
+`getTimetableBetweenDates`, `getSchoolLife`, `getClassLife`,
+`getPersonalTimeline`) return `null`/`undefined` rather than an empty
+object/array/string, or a differently-shaped error payload — this is
+inferred from reading the library's source, not yet observed against a
+real expired token. To check: with a corrupted/expired session (as in
+Step 4, but this time let `SESSION_MAX_AGE_MS` be large enough that the
+*preventive* refresh doesn't mask it, e.g. temporarily set
+`SESSION_MAX_AGE_MS` very high via `.env`), call each of the 7 guarded
+methods and confirm `assertPresent` actually throws
+`PossiblyExpiredSessionError` (temporarily log inside `assertPresent`
+before it throws, or catch the tool's `isError` result and check the
+message). If any method instead returns something *not* null/undefined
+on an expired token (an empty array, an empty object, a string), the
+guard silently won't fire for that method — note which one(s) and adjust
+`assertPresent`'s check (or that method's specific handling) in
+`src/client/blocksDirecteAdapter.ts` accordingly, then re-verify.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add scripts/smoke-test.ts README.md
@@ -3533,8 +4192,21 @@ git commit -m "docs: README and manual smoke-test script"
 
 ## Points to verify once Task 16's smoke test runs against a real account
 
-- `extractErrorCode`'s heuristic for reading École Directe's numeric error
-  code off a raw BlocksDirecte error (Task 4) — covered by Task 16 Step 4.
+- `extractErrorCode`'s heuristic for reading a numeric error code off a
+  raw error thrown by an *auth* call (login/refresh/2FA — the only
+  BlocksDirecte methods that actually check École Directe's `code` field,
+  confirmed by reading the library's source in Task 6's Amendment) —
+  covered by Task 16 Step 4.
+- **Whether an expired token really makes BlocksDirecte's data methods
+  return `null`/`undefined`** (not an empty array/object/string, and not
+  a differently-shaped error payload) — the entire
+  `PossiblyExpiredSessionError` strategy (Task 4's and Task 6's
+  Amendments) depends on this exact behavior, inferred from reading the
+  library's source but not yet observed against a real expired token —
+  covered by Task 16 Step 6.
+- **The real `SESSION_MAX_AGE_MS` value** — 15 minutes (Task 8's default)
+  is an untested guess; calibrate it against the real observed token
+  lifetime — covered by Task 16 Step 5.
 - Real shape of `getSchoolLife`/`getClassLife`/`getTimeline` responses —
   the mappers in Task 5 are typed against the library's `.d.ts` (verified
   by inspecting the package tarball during planning) but not yet
@@ -3542,8 +4214,6 @@ git commit -m "docs: README and manual smoke-test script"
 - Whether `AuthModules.refreshToken` truly needs `cnKey`/`cvKey` on every
   refresh or just the `accessToken` + `deviceUUID` — confirm from actual
   refresh responses.
-- Actual token/refresh-token lifetime (undocumented upstream) — observe
-  via `get_auth_status` over a few days of normal use.
 - Whether `fileType` values needed by `downloadDocument` are reliably
   available wherever a document is referenced elsewhere (e.g. in
   `getClassLife`'s `fichiers` or homework attachments) — may need a
