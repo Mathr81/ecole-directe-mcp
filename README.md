@@ -36,10 +36,14 @@ explicite au lieu de faire tomber le serveur.
 | `get_school_life` | Vie scolaire (absences, retards, sanctions) |
 | `get_class_life` | Vie de la classe et commentaires |
 | `get_timeline` | Fil d'actualité personnel |
+| `get_messages` | Liste les messages d'un dossier (en-têtes seulement) |
+| `read_message` | Contenu d'un message, HTML retiré, avec ses pièces jointes |
 | `download_document` | Télécharge un document dans `DOWNLOAD_DIR` et renvoie son chemin |
 
-La messagerie (`get_messages`) n'est pas incluse : le contrat exact de
-l'endpoint reste à vérifier avant d'écrire ce code (voir le plan).
+La messagerie est en deux outils parce que l'API l'impose : la liste
+renvoie `content: ""` pour chaque message, les corps n'existent que sur
+l'endpoint par message. Les pièces jointes se récupèrent avec
+`download_document` en passant `fileType` = `PIECE_JOINTE`.
 
 ## Variables d'environnement
 
@@ -76,7 +80,8 @@ implémentée directement dans `src/client/edAuth.ts` plutôt que déléguée à
 
 Les modules de données de la librairie restent utilisés, avec un correctif
 pour une récursion infinie dans leur vérification de module disponible
-(`patchBrokenModuleAvailabilityCheck`).
+(`patchBrokenModuleAvailabilityCheck`). La messagerie, absente de la
+librairie, est également en HTTP direct (`src/client/messaging.ts`).
 
 ## Limitations connues (V1)
 
@@ -102,8 +107,12 @@ monkey-patch, une montée de version silencieuse casserait ces correctifs.
 ## Statut
 
 V1 : usage local uniquement, transport stdio. Le transport HTTP
-(hébergement Docker sur le VPS, accessible via Tailscale) et un outil de
-messagerie sont prévus pour une V2 séparée.
+(hébergement Docker sur le VPS, accessible via Tailscale) est prévu pour
+une V2 séparée.
+
+La messagerie est en **lecture seule** : lister et lire. Envoyer, répondre
+et transférer ne sont pas implémentés — ce sont des écritures visibles par
+des tiers (professeurs, administration), à n'ajouter que délibérément.
 
 ## Développement
 

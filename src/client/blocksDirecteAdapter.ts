@@ -13,6 +13,7 @@ import {
   wrapCall,
 } from './errors.js';
 import { mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
+import { fetchMessage, fetchMessages } from './messaging.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
 
 function assertPresent<T>(value: T | null | undefined, context: string): T {
@@ -238,6 +239,16 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
         const client = clientFor(session);
         return mapTimeline(assertPresent(await client.timeline.getPersonalTimeline(), 'getPersonalTimeline'));
       });
+    },
+
+    // Messaging is absent from @blockshub/blocksdirecte, so it goes straight
+    // out over HTTP (src/client/messaging.ts) rather than through a client.
+    async getMessages(session, folder, limit) {
+      return wrapCall(() => fetchMessages(session, folder, limit));
+    },
+
+    async getMessage(session, messageId) {
+      return wrapCall(() => fetchMessage(session, messageId));
     },
 
     async downloadDocument(session, fileId, fileType, destinationDir) {

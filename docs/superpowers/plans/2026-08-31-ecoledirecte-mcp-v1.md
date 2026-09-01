@@ -4531,15 +4531,27 @@ git commit -m "docs: README and manual smoke-test script"
 
 ## Deferred / not in this plan
 
-- **`get_messages` tool / `src/client/messaging.ts`**: explicitly excluded
-  per the spec's own instruction not to write this code before verifying
-  the real request contract. Before starting it: get the location of the
-  user's "Mon ÉcoleDirecte" Electron app source (local path or repo),
-  read its auth/messaging request code, and cross-check against
-  `ecoledirecte-api-docs`'s `/v3/eleves/{id}/messages/{id}.awp` section.
-  Then it's a small follow-up task: one pure mapper (if the response
-  needs base64 decoding) plus one adapter method plus one tool,
-  following the exact same pattern as Tasks 5/6/12.
+- ~~**`get_messages` tool / `src/client/messaging.ts`**~~: **done**, after
+  the blocker was removed. The plan required verifying the request
+  contract against the user's "Mon ÉcoleDirecte" Electron app source
+  before writing this code; that turned out to be unnecessary once
+  Amendment 3 gave us a working session — the contract was verified
+  directly against the live API, which is stronger evidence than reading
+  a third-party client. Two of the plan's assumptions were wrong:
+  `subject` comes back as **plain text**, not base64 (the decoder is kept
+  but guarded, since other deployments may encode it), and the list
+  endpoint returns `content: ""` for every message, so bodies exist only
+  on the per-message endpoint. That is why there are two tools,
+  `get_messages` and `read_message`, rather than the single one the plan
+  imagined. Implemented as `src/client/messaging.ts` (direct HTTP — the
+  library has no messaging module at all), plus two adapter methods, two
+  tools, and 11 tests. Verified end-to-end over a real MCP session.
+  Sending/replying/forwarding is deliberately NOT implemented: those are
+  writes visible to teachers and administration.
+- **Attachments beyond listing them**: `read_message` returns each
+  attachment's id, so `download_document` with `fileType` =
+  `PIECE_JOINTE` can fetch it. Not smoke-tested — the account had no
+  message with an attachment at the time.
 - **V2** (HTTP transport on the VPS's Tailscale interface, Docker image
   for ARM64, `crypto.timingSafeEqual` bearer check, DNS rebinding
   protection, `/health` route): separate plan, written after V1 is

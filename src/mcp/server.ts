@@ -11,6 +11,8 @@ import { registerGetTimeline } from './tools/getTimeline.js';
 import { registerGetAuthStatus } from './tools/getAuthStatus.js';
 import { registerMarkHomeworkDone } from './tools/markHomeworkDone.js';
 import { registerDownloadDocument } from './tools/downloadDocument.js';
+import { registerGetMessages } from './tools/getMessages.js';
+import { registerReadMessage } from './tools/readMessage.js';
 
 export interface ToolContext {
   client: EcoleDirecteClient;
@@ -29,5 +31,7 @@ export function buildServer(context: ToolContext): McpServer {
   registerGetAuthStatus(server, context);
   registerMarkHomeworkDone(server, context);
   registerDownloadDocument(server, context);
+  registerGetMessages(server, context);
+  registerReadMessage(server, context);
   return server;
 }

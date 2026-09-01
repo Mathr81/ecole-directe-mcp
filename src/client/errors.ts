@@ -200,6 +200,8 @@ export function withAutoRefresh(
     getSchoolLife: (session) => withRetry(session, (s) => client.getSchoolLife(s)),
     getClassLife: (session) => withRetry(session, (s) => client.getClassLife(s)),
     getTimeline: (session) => withRetry(session, (s) => client.getTimeline(s)),
+    getMessages: (session, folder, limit) => withRetry(session, (s) => client.getMessages(s, folder, limit)),
+    getMessage: (session, messageId) => withRetry(session, (s) => client.getMessage(s, messageId)),
     downloadDocument: (session, fileId, fileType, destinationDir) =>
       withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir)),
     // getAuthStatus never touches the network (Task 6's adapter only reads

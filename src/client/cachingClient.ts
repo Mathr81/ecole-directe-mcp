@@ -73,6 +73,12 @@ export function createCachingClient(
     getSchoolLife: (session) => enqueue(() => client.getSchoolLife(session)),
     getClassLife: (session) => enqueue(() => client.getClassLife(session)),
     getTimeline: (session) => enqueue(() => client.getTimeline(session)),
+    // Cached like grades/homework/timetable: an agent browsing a mailbox
+    // re-lists it constantly, and a folder doesn't change within the TTL.
+    getMessages: (session, folder, limit) =>
+      cached(`messages:${session.username}:${folder}:${limit}`, () => client.getMessages(session, folder, limit)),
+    getMessage: (session, messageId) =>
+      cached(`message:${session.username}:${messageId}`, () => client.getMessage(session, messageId)),
     downloadDocument: (session, fileId, fileType, destinationDir) =>
       enqueue(() => client.downloadDocument(session, fileId, fileType, destinationDir)),
     getAuthStatus: (session) => enqueue(() => client.getAuthStatus(session)),

@@ -104,6 +104,25 @@ export interface TimelineEntry {
   summary: string;
 }
 
+export type MessageFolder = 'received' | 'sent' | 'draft' | 'archived';
+
+export interface MessageSummary {
+  id: string;
+  folder: MessageFolder;
+  subject: string;
+  /** Sender for received mail, first recipient for sent mail. */
+  correspondent: string;
+  date: string;
+  read: boolean;
+  attachmentCount: number;
+}
+
+export interface MessageDetail extends MessageSummary {
+  /** Body with HTML stripped — the API returns it as an HTML fragment. */
+  content: string;
+  attachments: Array<{ id: string; filename: string; type: string }>;
+}
+
 export interface DownloadResult {
   path: string;
   filename: string;
@@ -133,6 +152,8 @@ export interface EcoleDirecteClient {
   getSchoolLife(session: Session): Promise<SchoolLifeEntry[]>;
   getClassLife(session: Session): Promise<ClassLifeSummary>;
   getTimeline(session: Session): Promise<TimelineEntry[]>;
+  getMessages(session: Session, folder: MessageFolder, limit: number): Promise<MessageSummary[]>;
+  getMessage(session: Session, messageId: string): Promise<MessageDetail>;
   downloadDocument(
     session: Session,
     fileId: string,

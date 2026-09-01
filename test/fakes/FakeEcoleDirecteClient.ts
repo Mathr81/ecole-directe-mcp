@@ -6,6 +6,9 @@ import type {
   Grade,
   HomeworkItem,
   LoginCredentials,
+  MessageDetail,
+  MessageFolder,
+  MessageSummary,
   SchoolLifeEntry,
   Session,
   TimelineEntry,
@@ -46,6 +49,18 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
   schoolLife: SchoolLifeEntry[] = [];
   classLife: ClassLifeSummary = { className: '', content: '', updatedAt: '', comments: [] };
   timeline: TimelineEntry[] = [];
+  messages: MessageSummary[] = [];
+  message: MessageDetail = {
+    id: '1',
+    folder: 'received',
+    subject: 'Sujet',
+    correspondent: 'M. Martin',
+    date: '2026-01-09 08:00:00',
+    read: false,
+    attachmentCount: 0,
+    content: 'Bonjour',
+    attachments: [],
+  };
   downloadResult: DownloadResult = { path: '', filename: '', mimeType: '', sizeBytes: 0 };
   callDelayMs = 0;
 
@@ -116,6 +131,14 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
 
   getTimeline(_session: Session): Promise<TimelineEntry[]> {
     return this.record('getTimeline', () => this.timeline);
+  }
+
+  getMessages(_session: Session, _folder: MessageFolder, _limit: number): Promise<MessageSummary[]> {
+    return this.record('getMessages', () => this.messages);
+  }
+
+  getMessage(_session: Session, _messageId: string): Promise<MessageDetail> {
+    return this.record('getMessage', () => this.message);
   }
 
   downloadDocument(

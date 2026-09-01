@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
   const in14Days = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
-  const results = [
+  const results: boolean[] = [
     await step('getAuthStatus', () => client.getAuthStatus(current())),
     await step('getGrades', () => client.getGrades(current())),
     await step('getHomework', () => client.getHomework(current(), today, in14Days)),
@@ -62,7 +62,17 @@ async function main(): Promise<void> {
     await step('getSchoolLife', () => client.getSchoolLife(current())),
     await step('getClassLife', () => client.getClassLife(current())),
     await step('getTimeline', () => client.getTimeline(current())),
+    await step('getMessages', () => client.getMessages(current(), 'received', 5)),
   ];
+
+  // Reading a message needs an id from the list above, so it can only run when
+  // the mailbox isn't empty — reported as skipped rather than failed.
+  const inbox = await client.getMessages(current(), 'received', 1).catch(() => []);
+  if (inbox.length > 0) {
+    results.push(await step('getMessage', () => client.getMessage(current(), inbox[0].id)));
+  } else {
+    console.log('\n=== getMessage — ignoré (aucun message dans la boîte de réception)');
+  }
 
   const failed = results.filter((ok) => !ok).length;
   console.log(`\n---\nSession : ${resolveSessionPath()}`);
