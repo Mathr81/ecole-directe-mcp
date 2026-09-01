@@ -1557,6 +1557,303 @@ git commit -m "feat: preventive age-based refresh and PossiblyExpiredSessionErro
 
 ---
 
+### Amendment 2: two confirmed upstream bugs in `@blockshub/blocksdirecte@0.0.9-alpha` (found after Task 14, via real manual testing)
+
+**Context:** after a real login (Task 14's manual step), every tool call
+failed with `The accounts list is empty. Make sure you're logged in.`
+The user root-caused this down to `refreshCredential`'s call to
+`client.auth.refreshToken`, confirmed live against a real, minutes-old
+token. Reading the compiled bundle
+(`node_modules/@blockshub/blocksdirecte/dist/index.js`, reformatted with
+`prettier --parser babel` for readability) confirmed two distinct,
+independent bugs — the second found only by tracing what happens *after*
+a hypothetical successful refresh:
+
+**Bug 1 — `refreshToken` silently swallows session-expired errors.**
+`AuthModules.prototype.refreshToken`'s response handling only branches on
+codes `250` (2FA) and `505` (bad creds); every other code — including
+whatever École Directe returns for an expired/invalid reLogin attempt —
+falls into the `default:` branch, which is the *success* path. It blindly
+does `Object.assign(this.credentials, { token: n.token, accounts:
+n.data.accounts })` and returns `{ ...n.data, token: n.token }` even when
+the real response was an error with `accounts: []` and `token: ''`.
+Nothing downstream can tell this apart from a real success.
+
+**Bug 2 — `isModuleAvailableForSelectedAccount` recurses infinitely.**
+Independent of Bug 1, and far more severe: this method (defined once on
+the shared, unexported `Modules` base class that `marks`/`homework`/
+`timetable`/`schoollife`/`classlife` all extend — `timeline` and
+`downloader` are unaffected, they're constructed without a
+`moduleName`) is:
+```js
+isModuleAvailableForSelectedAccount() {
+  if (!this.moduleName) throw Error(...);
+  return typeof this.getSelectedAccount().modules.find(
+    (o) => o.code === this.moduleName,
+  ) < "u";
+}
+```
+`getSelectedAccount()` calls `getSelectedAccountWithModuleName(this.moduleName)`,
+which — because `this.moduleName` is set for all five of the above
+modules — calls `isModuleAvailableForSelectedAccount()` again. Unconditional
+recursion, no base case. **This means 5 of our 7 data-fetching methods
+would never have worked even with a perfectly valid, non-expired
+session** — it was simply never reached before, because `credentials.accounts`
+was always empty first (Bug 1's effect) and `checkSelectedAccount()` throws
+before ever reaching this code.
+
+**Verified live, with zero network calls and zero real credentials**: a
+throwaway script (`new Client({ token: 'fake', accounts: [<fabricated
+but structurally valid account>], selectedAccounts: 0 })`, then
+`client.marks.getSelectedAccount()` with a patched call counter) showed
+unbounded recursive calls — confirming this is real, not a misreading of
+minified code.
+
+**Decision (discussed with the user, who approved this exact scope):**
+patch both bugs from inside our own adapter — no fork, no rewrite of the
+affected methods from scratch (that remains "Option C" if this stops
+being viable) — and open an upstream issue. This does **not** by itself
+fix the deeper, still-unconfirmed question of *why* `refreshToken` is
+rejected by the real API so soon after a fresh login, or the related
+design question (`ensureClient` refreshes proactively on every process's
+first call, rather than trying the existing token first) the user's own
+bug report raised — both are explicitly out of scope for this amendment
+and are called out again at the end as a follow-up decision, not silently
+folded in.
+
+**Files:**
+- Modify: `src/client/blocksDirecteAdapter.ts`
+- Create: `test/client/blocksDirecteAdapter.test.ts`
+
+**Interfaces:**
+- Consumes: `Client`, `Credential`, `Account` (all exported by
+  `@blockshub/blocksdirecte`), `PossiblyExpiredSessionError` (Task 4's
+  amendment).
+- Produces: `patchBrokenModuleAvailabilityCheck(client)`,
+  `assertRefreshSucceeded(result)` — both exported from
+  `blocksDirecteAdapter.ts` specifically so they're unit-testable without
+  ever invoking the real (broken) recursive path or a real network call.
+
+**Testing note — do NOT write a test that exercises the original,
+unpatched `isModuleAvailableForSelectedAccount`.** It's unconditional
+synchronous recursion; depending on stack size this can spin for a very
+long time (observed: 120+ seconds) burning CPU before Node throws
+`RangeError: Maximum call stack size exceeded` — a single-threaded hang
+long enough to make a test runner's own timeout unreliable. Every test
+below only ever calls the *patched* method, proven correct by its return
+value and by the test suite completing normally at all.
+
+- [ ] **Step 1: Write the failing tests**
+
+```typescript
+// test/client/blocksDirecteAdapter.test.ts
+import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
+import { describe, expect, it } from 'vitest';
+import { assertRefreshSucceeded, patchBrokenModuleAvailabilityCheck } from '../../src/client/blocksDirecteAdapter.js';
+import { PossiblyExpiredSessionError } from '../../src/client/errors.js';
+
+function makeFakeAccount(overrides: Partial<Account> = {}): Account {
+  return {
+    id: 12345,
+    typeCompte: 'E' as Account['typeCompte'],
+    modules: [{ code: 'NOTES', enable: true, ordre: 1, badge: 0, params: {} }],
+    profile: { classe: { id: 1, code: 'X', libelle: 'X', estNote: 1 } } as Account['profile'],
+  } as Account;
+}
+
+function makeFakeCredential(account: Account): Credential {
+  return { token: 'fake-token', accounts: [account], selectedAccounts: 0 };
+}
+
+describe('patchBrokenModuleAvailabilityCheck', () => {
+  it('returns the selected account without recursing, for a module present on the account', () => {
+    const client = new Client(makeFakeCredential(makeFakeAccount()));
+    patchBrokenModuleAvailabilityCheck(client);
+
+    const account = client.marks.getSelectedAccount();
+
+    expect(account.id).toBe(12345);
+  });
+
+  it('reports a module as unavailable when the account does not list it', () => {
+    const client = new Client(makeFakeCredential(makeFakeAccount({ modules: [] })));
+    patchBrokenModuleAvailabilityCheck(client);
+
+    const available = (client.marks as unknown as { isModuleAvailableForSelectedAccount(): boolean }).isModuleAvailableForSelectedAccount();
+
+    expect(available).toBe(false);
+  });
+
+  it('patches all five affected modules (marks, homework, timetable, schoollife, classlife)', () => {
+    const client = new Client(
+      makeFakeCredential(
+        makeFakeAccount({
+          modules: [
+            { code: 'NOTES', enable: true, ordre: 1, badge: 0, params: {} },
+            { code: 'EDT', enable: true, ordre: 2, badge: 0, params: {} },
+            { code: 'CAHIER_DE_TEXTES', enable: true, ordre: 3, badge: 0, params: {} },
+            { code: 'VIE_SCOLAIRE', enable: true, ordre: 4, badge: 0, params: {} },
+            { code: 'VIE_DE_LA_CLASSE', enable: true, ordre: 5, badge: 0, params: {} },
+          ],
+        }),
+      ),
+    );
+    patchBrokenModuleAvailabilityCheck(client);
+
+    expect(client.marks.getSelectedAccount().id).toBe(12345);
+    expect(client.homework.getSelectedAccount().id).toBe(12345);
+    expect(client.timetable.getSelectedAccount().id).toBe(12345);
+    expect(client.schoollife.getSelectedAccount().id).toBe(12345);
+    expect(client.classlife.getSelectedAccount().id).toBe(12345);
+  });
+});
+
+describe('assertRefreshSucceeded', () => {
+  it('throws PossiblyExpiredSessionError when the result has an empty token and no accounts', () => {
+    expect(() => assertRefreshSucceeded({ token: '', accounts: [] })).toThrow(PossiblyExpiredSessionError);
+  });
+
+  it('throws when accounts is empty even if a token is present', () => {
+    expect(() => assertRefreshSucceeded({ token: 'x', accounts: [] })).toThrow(PossiblyExpiredSessionError);
+  });
+
+  it('does not throw when both token and a non-empty accounts array are present', () => {
+    expect(() => assertRefreshSucceeded({ token: 'x', accounts: [{}] })).not.toThrow();
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run test/client/blocksDirecteAdapter.test.ts`
+Expected: FAIL — `patchBrokenModuleAvailabilityCheck`/`assertRefreshSucceeded`
+are not exported yet.
+
+- [ ] **Step 3: Add the two patches to `src/client/blocksDirecteAdapter.ts`**
+
+Add `Account` to the existing `@blockshub/blocksdirecte` import (it's
+already exported by the library):
+
+```typescript
+import {
+  Client,
+  InvalidCredentials,
+  Invalid2FAKey,
+  Require2FA,
+  type Account,
+  type Credential,
+} from '@blockshub/blocksdirecte';
+```
+
+Add these two new exported functions (near the top, after `assertPresent`):
+
+```typescript
+interface PatchableModule {
+  credentials: Credential;
+  moduleName?: string;
+  isModuleAvailableForSelectedAccount(): boolean;
+}
+
+const PATCHED_MODULE_KEYS = ['marks', 'homework', 'timetable', 'schoollife', 'classlife'] as const;
+
+/**
+ * Works around a confirmed bug in @blockshub/blocksdirecte@0.0.9-alpha:
+ * Modules.prototype.isModuleAvailableForSelectedAccount calls
+ * this.getSelectedAccount(), which calls back into
+ * isModuleAvailableForSelectedAccount() — unconditional recursion for
+ * every module built with a moduleName (these five; timeline/downloader
+ * are unaffected). This reimplements the intended check directly against
+ * the credentials the caller already validated, with no recursion.
+ * Remove once fixed upstream.
+ */
+export function patchBrokenModuleAvailabilityCheck(client: Client): void {
+  for (const key of PATCHED_MODULE_KEYS) {
+    const moduleInstance = client[key] as unknown as PatchableModule;
+    moduleInstance.isModuleAvailableForSelectedAccount = function (this: PatchableModule): boolean {
+      const account: Account = this.credentials.accounts[this.credentials.selectedAccounts];
+      return account.modules.some((entry) => entry.code === this.moduleName);
+    };
+  }
+}
+
+/**
+ * Works around a confirmed bug in @blockshub/blocksdirecte@0.0.9-alpha:
+ * AuthModules.prototype.refreshToken only recognizes response codes 250
+ * and 505 — any other code (including an expired/invalid session) falls
+ * through to its success path with an empty accounts array and an empty
+ * token, indistinguishable from a real success without this check.
+ * Remove once fixed upstream.
+ */
+export function assertRefreshSucceeded(result: { token: string; accounts: unknown[] }): void {
+  if (!result.token || result.accounts.length === 0) {
+    throw new PossiblyExpiredSessionError(
+      "École Directe a refusé le rafraîchissement de session (bug connu de @blockshub/blocksdirecte : les codes d'expiration ne sont pas détectés et un résultat vide est traité comme un succès).",
+    );
+  }
+}
+```
+
+Update `refreshCredential` to call `assertRefreshSucceeded`:
+
+```typescript
+async function refreshCredential(session: Session): Promise<Credential> {
+  const bootstrap = new Client();
+  const result = await bootstrap.auth.refreshToken(
+    session.username,
+    session.accountKind as AccountKindValue,
+    session.accessToken,
+    session.cnKey,
+    session.cvKey,
+    session.deviceUUID,
+  );
+  assertRefreshSucceeded(result);
+  return { token: result.token, accounts: result.accounts, selectedAccounts: 0 };
+}
+```
+
+Update `ensureClient` to patch every `Client` it constructs:
+
+```typescript
+async function ensureClient(session: Session): Promise<Client> {
+  const cached = credentialCache.get(session.username);
+  if (cached) {
+    const client = new Client(cached);
+    patchBrokenModuleAvailabilityCheck(client);
+    return client;
+  }
+  const refreshed = await refreshCredential(session);
+  credentialCache.set(session.username, refreshed);
+  const client = new Client(refreshed);
+  patchBrokenModuleAvailabilityCheck(client);
+  return client;
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx vitest run test/client/blocksDirecteAdapter.test.ts`
+Expected: PASS (6 tests).
+
+Run: `npm run build && npm run typecheck && npm test` (full suite) —
+confirm nothing in Tasks 1-14 regressed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/client/blocksDirecteAdapter.ts test/client/blocksDirecteAdapter.test.ts
+git commit -m "fix: work around two confirmed @blockshub/blocksdirecte bugs (silent refresh failure, module-check recursion)"
+```
+
+**Deliberately not done here — flag back to the user, don't decide silently:**
+the proactive refresh in `ensureClient`'s cache-miss path (refreshing on
+every fresh process start rather than trying the existing token first)
+is a separate design question the user's own bug report raised. This
+amendment makes that path fail *cleanly* (a typed, retriable error
+instead of a confusing crash) but does not remove the unnecessary
+refresh attempt itself. Revisit only if the user asks to.
+
+---
+
 ## Task 5: Pure BlocksDirecte → DTO mappers
 
 **Context for the implementer:** `@blockshub/blocksdirecte`'s bundled
