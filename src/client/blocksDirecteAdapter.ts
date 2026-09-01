@@ -8,6 +8,7 @@ import {
   InvalidCredentials,
   Invalid2FAKey,
   Require2FA,
+  type Account,
   type Credential,
 } from '@blockshub/blocksdirecte';
 import { InvalidCredentialsError, InvalidTwoFactorAnswerError, PossiblyExpiredSessionError, mapCaughtError, wrapCall } from './errors.js';
@@ -23,6 +24,50 @@ function assertPresent<T>(value: T | null | undefined, context: string): T {
     );
   }
   return value;
+}
+
+interface PatchableModule {
+  credentials: Credential;
+  moduleName?: string;
+  isModuleAvailableForSelectedAccount(): boolean;
+}
+
+const PATCHED_MODULE_KEYS = ['marks', 'homework', 'timetable', 'schoollife', 'classlife'] as const;
+
+/**
+ * Works around a confirmed bug in @blockshub/blocksdirecte@0.0.9-alpha:
+ * Modules.prototype.isModuleAvailableForSelectedAccount calls
+ * this.getSelectedAccount(), which calls back into
+ * isModuleAvailableForSelectedAccount() — unconditional recursion for
+ * every module built with a moduleName (these five; timeline/downloader
+ * are unaffected). This reimplements the intended check directly against
+ * the credentials the caller already validated, with no recursion.
+ * Remove once fixed upstream.
+ */
+export function patchBrokenModuleAvailabilityCheck(client: Client): void {
+  for (const key of PATCHED_MODULE_KEYS) {
+    const moduleInstance = client[key] as unknown as PatchableModule;
+    moduleInstance.isModuleAvailableForSelectedAccount = function (this: PatchableModule): boolean {
+      const account: Account = this.credentials.accounts[this.credentials.selectedAccounts];
+      return account.modules.some((entry) => entry.code === this.moduleName);
+    };
+  }
+}
+
+/**
+ * Works around a confirmed bug in @blockshub/blocksdirecte@0.0.9-alpha:
+ * AuthModules.prototype.refreshToken only recognizes response codes 250
+ * and 505 — any other code (including an expired/invalid session) falls
+ * through to its success path with an empty accounts array and an empty
+ * token, indistinguishable from a real success without this check.
+ * Remove once fixed upstream.
+ */
+export function assertRefreshSucceeded(result: { token: string; accounts: unknown[] }): void {
+  if (!result.token || result.accounts.length === 0) {
+    throw new PossiblyExpiredSessionError(
+      "École Directe a refusé le rafraîchissement de session (bug connu de @blockshub/blocksdirecte : les codes d'expiration ne sont pas détectés et un résultat vide est traité comme un succès).",
+    );
+  }
 }
 
 const credentialCache = new Map<string, Credential>();
@@ -61,15 +106,22 @@ async function refreshCredential(session: Session): Promise<Credential> {
     session.cvKey,
     session.deviceUUID,
   );
+  assertRefreshSucceeded(result);
   return { token: result.token, accounts: result.accounts, selectedAccounts: 0 };
 }
 
 async function ensureClient(session: Session): Promise<Client> {
   const cached = credentialCache.get(session.username);
-  if (cached) return new Client(cached);
+  if (cached) {
+    const client = new Client(cached);
+    patchBrokenModuleAvailabilityCheck(client);
+    return client;
+  }
   const refreshed = await refreshCredential(session);
   credentialCache.set(session.username, refreshed);
-  return new Client(refreshed);
+  const client = new Client(refreshed);
+  patchBrokenModuleAvailabilityCheck(client);
+  return client;
 }
 
 export function createBlocksDirecteClient(): EcoleDirecteClient {
