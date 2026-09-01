@@ -20,9 +20,11 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     accountId: '12345',
     accountKind: 'E',
     displayName: 'Jean Dupont',
+    token: 'fake-session-token',
     accessToken: 'fake-access-token',
     cnKey: undefined,
     cvKey: undefined,
+    accounts: [{ id: 12345 }],
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };

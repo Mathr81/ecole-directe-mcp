@@ -3,19 +3,17 @@ import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
+import { edGet2FAQuestion, edLogin, edRelogin, edSend2FAAnswer, type AuthResult } from './edAuth.js';
 import {
-  Client,
-  InvalidCredentials,
-  Invalid2FAKey,
-  Require2FA,
-  type Account,
-  type Credential,
-} from '@blockshub/blocksdirecte';
-import { InvalidCredentialsError, InvalidTwoFactorAnswerError, PossiblyExpiredSessionError, mapCaughtError, wrapCall } from './errors.js';
+  AuthenticationRequiredError,
+  PossiblyExpiredSessionError,
+  TwoFactorRequiredError,
+  mapCaughtError,
+  wrapCall,
+} from './errors.js';
 import { mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
-
-type AccountKindValue = Parameters<InstanceType<typeof Client>['auth']['refreshToken']>[1];
 
 function assertPresent<T>(value: T | null | undefined, context: string): T {
   if (value === null || value === undefined) {
@@ -55,91 +53,72 @@ export function patchBrokenModuleAvailabilityCheck(client: Client): void {
 }
 
 /**
- * Works around a confirmed bug in @blockshub/blocksdirecte@0.0.9-alpha:
- * AuthModules.prototype.refreshToken only recognizes response codes 250
- * and 505 — any other code (including an expired/invalid session) falls
- * through to its success path with an empty accounts array and an empty
- * token, indistinguishable from a real success without this check.
- * Remove once fixed upstream.
+ * Turns an authentication result into the session we persist. Note that
+ * `token` and `accessToken` are two different secrets: `token` is the
+ * short-lived one every data call sends as `X-Token`, `accessToken` is the
+ * long-lived per-device credential that mints new ones. Storing one where the
+ * other belongs is what made every call fail with "Token invalide !".
  */
-export function assertRefreshSucceeded(result: { token: string; accounts: unknown[] }): void {
-  if (!result.token || result.accounts.length === 0) {
-    throw new PossiblyExpiredSessionError(
-      "École Directe a refusé le rafraîchissement de session (bug connu de @blockshub/blocksdirecte : les codes d'expiration ne sont pas détectés et un résultat vide est traité comme un succès).",
-    );
-  }
-}
-
-const credentialCache = new Map<string, Credential>();
-
-function accountFromCredential(credential: Credential) {
-  const account = credential.accounts[credential.selectedAccounts];
-  if (!account) throw new Error('École Directe credential has no selected account');
-  return account;
-}
-
-function sessionFromCredential(
+function sessionFromAuthResult(
   base: { username: string; deviceUUID: string; cnKey?: string; cvKey?: string },
-  credential: Credential,
+  result: AuthResult,
 ): Session {
-  const account = accountFromCredential(credential);
+  const account = (result.accounts as Account[])[0];
+  if (!account) throw new PossiblyExpiredSessionError("École Directe n'a renvoyé aucun compte.");
   return {
     username: base.username,
     deviceUUID: base.deviceUUID,
     accountId: String(account.id),
     accountKind: account.typeCompte,
     displayName: `${account.prenom} ${account.nom}`.trim(),
-    accessToken: credential.token ?? account.accessToken,
+    token: result.token,
+    accessToken: account.accessToken,
     cnKey: base.cnKey,
     cvKey: base.cvKey,
+    accounts: result.accounts,
     updatedAt: new Date().toISOString(),
   };
 }
 
-async function refreshCredential(session: Session): Promise<Credential> {
-  const bootstrap = new Client();
-  const result = await bootstrap.auth.refreshToken(
-    session.username,
-    session.accountKind as AccountKindValue,
-    session.accessToken,
-    session.cnKey,
-    session.cvKey,
-    session.deviceUUID,
-  );
-  assertRefreshSucceeded(result);
-  return { token: result.token, accounts: result.accounts, selectedAccounts: 0 };
-}
+/**
+ * One Client per session token. Not just an optimisation: BlocksDirecte's
+ * RESTManager starts a `setInterval` in its constructor, so a Client built per
+ * call would leak a timer per call and keep the process alive forever.
+ */
+let cachedClient: { token: string; client: Client } | null = null;
 
-async function ensureClient(session: Session): Promise<Client> {
-  const cached = credentialCache.get(session.username);
-  if (cached) {
-    const client = new Client(cached);
-    patchBrokenModuleAvailabilityCheck(client);
-    return client;
+/**
+ * Builds the BlocksDirecte client straight from the stored session — no
+ * network call. The account list is persisted at login precisely so that a
+ * fresh process doesn't have to spend a re-login just to learn which account
+ * and modules exist; a token that has actually expired surfaces on the first
+ * data call and is handled by `withAutoRefresh`.
+ */
+function clientFor(session: Session): Client {
+  if (cachedClient && cachedClient.token === session.token) return cachedClient.client;
+  const accounts = session.accounts as Account[] | undefined;
+  if (!session.token || !accounts || accounts.length === 0) {
+    throw new AuthenticationRequiredError(
+      'Session incomplète ou périmée (jeton ou liste de comptes manquants). Relance `ecoledirecte-mcp login`.',
+    );
   }
-  const refreshed = await refreshCredential(session);
-  credentialCache.set(session.username, refreshed);
-  const client = new Client(refreshed);
+  const credential: Credential = { token: session.token, accounts, selectedAccounts: 0 };
+  const client = new Client(credential);
   patchBrokenModuleAvailabilityCheck(client);
+  cachedClient = { token: session.token, client };
   return client;
 }
 
 export function createBlocksDirecteClient(): EcoleDirecteClient {
   return {
     async login({ username, password, deviceUUID }: LoginCredentials): Promise<Session | TwoFactorChallenge> {
-      const client = new Client();
       try {
-        const result = await client.auth.loginUsername(username, password, undefined, undefined, true, deviceUUID);
-        const credential: Credential = { token: result.token, accounts: result.accounts, selectedAccounts: 0 };
-        credentialCache.set(username, credential);
-        return sessionFromCredential({ username, deviceUUID }, credential);
+        const result = await edLogin({ username, password, deviceUUID });
+        return sessionFromAuthResult({ username, deviceUUID }, result);
       } catch (error) {
-        if (error instanceof Require2FA) {
-          const question = await client.auth.get2FAQuestion(error.token);
-          return { token: error.token, question: question.question, propositions: question.propositions };
-        }
-        if (error instanceof InvalidCredentials) {
-          throw new InvalidCredentialsError(505, error.message);
+        if (error instanceof TwoFactorRequiredError) {
+          const question = await edGet2FAQuestion(error.twoFactorToken);
+          return { token: error.twoFactorToken, question: question.question, propositions: question.propositions };
         }
         throw mapCaughtError(error);
       }
@@ -150,31 +129,30 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
       answer: string,
       { username, password, deviceUUID }: LoginCredentials,
     ): Promise<Session> {
-      const client = new Client();
-      let cnCv;
-      try {
-        cnCv = await client.auth.send2FAQuestion(answer, challenge.token);
-      } catch (error) {
-        if (error instanceof Invalid2FAKey) throw new InvalidTwoFactorAnswerError(0, error.message);
-        throw error;
-      }
-      const result = await client.auth.loginUsername(username, password, cnCv.cn, cnCv.cv, true, deviceUUID);
-      const credential: Credential = { token: result.token, accounts: result.accounts, selectedAccounts: 0 };
-      credentialCache.set(username, credential);
-      return sessionFromCredential({ username, deviceUUID, cnKey: cnCv.cn, cvKey: cnCv.cv }, credential);
+      return wrapCall(async () => {
+        const { cn, cv } = await edSend2FAAnswer(answer, challenge.token);
+        const result = await edLogin({ username, password, deviceUUID, cnKey: cn, cvKey: cv });
+        return sessionFromAuthResult({ username, deviceUUID, cnKey: cn, cvKey: cv }, result);
+      });
     },
 
     async refreshSession(session: Session): Promise<Session> {
       return wrapCall(async () => {
-        const credential = await refreshCredential(session);
-        credentialCache.set(session.username, credential);
-        return sessionFromCredential(session, credential);
+        const result = await edRelogin({
+          username: session.username,
+          accountKind: session.accountKind,
+          accessToken: session.accessToken,
+          deviceUUID: session.deviceUUID,
+          cnKey: session.cnKey,
+          cvKey: session.cvKey,
+        });
+        return sessionFromAuthResult(session, result);
       });
     },
 
     async getGrades(session, schoolYear) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
         return mapGrades(marks.notes);
       });
@@ -182,7 +160,7 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
 
     async getHomework(session, fromDate, toDate) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         const upcoming = assertPresent(await client.homework.getUpcomingHomework(), 'getUpcomingHomework');
         const dates = Object.keys(upcoming).filter((date) => date >= fromDate && date <= toDate);
         const perDate: Array<{ date: string; response: Awaited<ReturnType<typeof client.homework.getHomeworksForDate>> }> = [];
@@ -196,7 +174,7 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
 
     async markHomeworkDone(session, homeworkId, done) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         const id = Number(homeworkId);
         if (done) {
           await client.homework.markHomeworkAsDone(id);
@@ -208,7 +186,7 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
 
     async getTimetable(session, fromDate, toDate) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         const courses = assertPresent(
           await client.timetable.getTimetableBetweenDates(new Date(fromDate), new Date(toDate)),
           'getTimetableBetweenDates',
@@ -219,28 +197,28 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
 
     async getSchoolLife(session) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         return mapSchoolLife(assertPresent(await client.schoollife.getSchoolLife(), 'getSchoolLife'));
       });
     },
 
     async getClassLife(session) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         return mapClassLife(assertPresent(await client.classlife.getClassLife(), 'getClassLife'));
       });
     },
 
     async getTimeline(session) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         return mapTimeline(assertPresent(await client.timeline.getPersonalTimeline(), 'getPersonalTimeline'));
       });
     },
 
     async downloadDocument(session, fileId, fileType, destinationDir) {
       return wrapCall(async () => {
-        const client = await ensureClient(session);
+        const client = clientFor(session);
         const stream = await client.downloader.getStream(Number(fileId), fileType);
         if (!stream) throw new Error(`École Directe returned no content for document ${fileId}`);
         await mkdir(destinationDir, { recursive: true });

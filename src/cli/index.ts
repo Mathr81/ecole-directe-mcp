@@ -70,25 +70,15 @@ async function runServeCommand(useHttp: boolean): Promise<void> {
     process.exit(1);
   }
   const config = loadConfig();
-  const diskSession = await readSession(config.sessionPath);
   const base = createBlocksDirecteClient();
-
-  let initialSession = diskSession;
-  if (diskSession) {
-    try {
-      const refreshed = await base.refreshSession(diskSession);
-      await writeSession(refreshed, config.sessionPath);
-      initialSession = refreshed;
-    } catch (error) {
-      console.error(
-        `Avertissement : impossible de rafraîchir la session au démarrage (${(error as Error).message}). ` +
-          'Le serveur démarre quand même ; `get_auth_status` permet de diagnostiquer, et les autres outils ' +
-          'retenteront un rafraîchissement à la demande.',
-      );
-    }
-  } else {
+  // No refresh here: the stored session already carries everything the client
+  // needs, and a re-login on every startup burns the one credential that can
+  // recover an expired token. A token that really has expired surfaces on the
+  // first data call, where `withAutoRefresh` refreshes once and retries.
+  const initialSession = await readSession(config.sessionPath);
+  if (!initialSession) {
     console.error(
-      "Aucune session trouvée. `get_auth_status` le signalera. Lance `ecoledirecte-mcp login` dans un autre terminal pour t'authentifier.",
+      "Aucune session exploitable trouvée. `get_auth_status` le signalera. Lance `ecoledirecte-mcp login` dans un autre terminal pour t'authentifier.",
     );
   }
 

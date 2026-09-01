@@ -16,14 +16,37 @@ export function resolveSessionPath(): string {
   return process.env.SESSION_PATH ?? defaultSessionPath();
 }
 
+/**
+ * A session file is only usable if it carries both secrets and the account
+ * list. Sessions written before those fields existed parse fine but produce
+ * "Token invalide !" on every call, so they are treated as absent — the user
+ * gets "run login" instead of an unexplained failure on each tool.
+ */
+export function isUsableSession(value: unknown): value is Session {
+  const session = value as Partial<Session> | null;
+  return (
+    typeof session === 'object' &&
+    session !== null &&
+    typeof session.username === 'string' &&
+    typeof session.token === 'string' &&
+    session.token.length > 0 &&
+    typeof session.accessToken === 'string' &&
+    session.accessToken.length > 0 &&
+    Array.isArray(session.accounts) &&
+    session.accounts.length > 0
+  );
+}
+
 export async function readSession(path: string = resolveSessionPath()): Promise<Session | null> {
+  let parsed: unknown;
   try {
-    const raw = await readFile(path, 'utf8');
-    return JSON.parse(raw) as Session;
+    parsed = JSON.parse(await readFile(path, 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (error instanceof SyntaxError) return null;
     throw error;
   }
+  return isUsableSession(parsed) ? parsed : null;
 }
 
 export async function writeSession(session: Session, path: string = resolveSessionPath()): Promise<void> {

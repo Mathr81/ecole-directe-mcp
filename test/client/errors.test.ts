@@ -41,9 +41,9 @@ describe('withAutoRefresh', () => {
   it('refreshes once and retries after a TokenExpiredError, then persists the new session', async () => {
     const fake = new FakeEcoleDirecteClient();
     fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
-    fake.refreshedSession = makeSession({ accessToken: 'new-token' });
+    fake.refreshedSession = makeSession({ token: 'new-token' });
     const persisted: string[] = [];
-    const box = createSessionBox(makeSession(), async (session) => { persisted.push(session.accessToken); });
+    const box = createSessionBox(makeSession(), async (session) => { persisted.push(session.token); });
     const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
 
     const grades = await client.getGrades(box.get()!);
@@ -52,7 +52,7 @@ describe('withAutoRefresh', () => {
     expect(fake.callCounts.refreshSession).toBe(1);
     expect(fake.callCounts.getGrades).toBe(2);
     expect(persisted).toEqual(['new-token']);
-    expect(box.get()!.accessToken).toBe('new-token');
+    expect(box.get()!.token).toBe('new-token');
   });
 
   it('throws AuthenticationRequiredError without looping when refresh also fails', async () => {
@@ -71,9 +71,9 @@ describe('withAutoRefresh', () => {
     const fake = new FakeEcoleDirecteClient();
     fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
     fake.queueFailure('getHomework', new TokenExpiredError(525, 'expired'));
-    fake.refreshedSession = makeSession({ accessToken: 'new-token' });
+    fake.refreshedSession = makeSession({ token: 'new-token' });
     const persistCalls: string[] = [];
-    const box = createSessionBox(makeSession(), async (session) => { persistCalls.push(session.accessToken); });
+    const box = createSessionBox(makeSession(), async (session) => { persistCalls.push(session.token); });
     const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
 
     await Promise.all([
@@ -87,9 +87,9 @@ describe('withAutoRefresh', () => {
 
   it('reuses an already-fresher session from the box instead of refreshing again', async () => {
     const fake = new FakeEcoleDirecteClient();
-    const staleSession = makeSession({ accessToken: 'stale-token' });
+    const staleSession = makeSession({ token: 'stale-token' });
     fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
-    const box = createSessionBox(makeSession({ accessToken: 'fresh-token' }), async () => {});
+    const box = createSessionBox(makeSession({ token: 'fresh-token' }), async () => {});
     const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
 
     const grades = await client.getGrades(staleSession);
@@ -103,7 +103,7 @@ describe('withAutoRefresh — preventive age-based refresh', () => {
   it('proactively refreshes a session older than maxAgeMs before calling fn', async () => {
     const fake = new FakeEcoleDirecteClient();
     const staleSession = makeSession({ updatedAt: '2026-01-01T00:00:00.000Z' });
-    fake.refreshedSession = makeSession({ accessToken: 'new-token', updatedAt: '2026-01-01T00:10:00.000Z' });
+    fake.refreshedSession = makeSession({ token: 'new-token', updatedAt: '2026-01-01T00:10:00.000Z' });
     const box = createSessionBox(staleSession, async () => {});
     const now = () => new Date('2026-01-01T00:30:00.000Z').getTime();
     const client = withAutoRefresh(fake, box, { maxAgeMs: 15 * 60 * 1000, now });
@@ -156,7 +156,7 @@ describe('withAutoRefresh — PossiblyExpiredSessionError', () => {
   it('treats PossiblyExpiredSessionError the same as TokenExpiredError for reactive retry', async () => {
     const fake = new FakeEcoleDirecteClient();
     fake.queueFailure('getGrades', new PossiblyExpiredSessionError());
-    fake.refreshedSession = makeSession({ accessToken: 'new-token' });
+    fake.refreshedSession = makeSession({ token: 'new-token' });
     const box = createSessionBox(makeSession(), async () => {});
     const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
 

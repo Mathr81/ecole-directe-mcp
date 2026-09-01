@@ -16,6 +16,20 @@ export class SchoolUnavailableError extends EcoleDirecteApiError {}
 export class InvalidTwoFactorAnswerError extends EcoleDirecteApiError {}
 
 /**
+ * École Directe answered code 250: this device must pass the QCM ("double
+ * authentification") before a token is issued. Carries the short-lived
+ * 2FA token the QCM endpoints need.
+ */
+export class TwoFactorRequiredError extends EcoleDirecteApiError {
+  readonly twoFactorToken: string;
+  constructor(twoFactorToken: string, message = 'École Directe demande une double authentification (QCM).') {
+    super(250, message);
+    this.name = 'TwoFactorRequiredError';
+    this.twoFactorToken = twoFactorToken;
+  }
+}
+
+/**
  * Thrown by the adapter (Task 6) when a BlocksDirecte data method returns
  * null/undefined where it structurally guarantees an object or array — the
  * one observable symptom of an expired token for those methods, since
@@ -50,6 +64,11 @@ export function mapErrorCode(code: number, message: string): EcoleDirecteApiErro
       return new InvalidCredentialsError(code, message);
     case 520:
     case 525:
+    // 526 ("Votre session est invalide ou expirée, identifiez-vous à nouveau")
+    // is what /v3/login.awp answers for a re-login whose accesstoken is no
+    // longer accepted. Observed against the real API; absent from the
+    // community docs' error-code list.
+    case 526:
       return new TokenExpiredError(code, message);
     case 535:
       return new SchoolUnavailableError(code, message);
@@ -123,7 +142,7 @@ export function withAutoRefresh(
 
   async function refreshOnce(staleSession: Session): Promise<Session> {
     const current = sessionBox.get();
-    if (current && current.accessToken !== staleSession.accessToken) {
+    if (current && current.token !== staleSession.token) {
       return current;
     }
     if (!inFlightRefresh) {

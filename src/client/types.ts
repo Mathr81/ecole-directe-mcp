@@ -1,12 +1,36 @@
+/**
+ * The provider's raw account list, persisted verbatim in the session file.
+ * Deliberately opaque here: only the client adapter knows its real shape, so
+ * that no provider-specific type leaks into the tools. See `Session.accounts`.
+ */
+export type ProviderAccounts = readonly unknown[];
+
 export interface Session {
   username: string;
   deviceUUID: string;
   accountId: string;
   accountKind: string;
   displayName: string;
+  /**
+   * Short-lived session token, sent as the `X-Token` header on every data
+   * call. Rotated by every successful login or re-login.
+   */
+  token: string;
+  /**
+   * Long-lived per-device credential (École Directe's `access_token`), the
+   * only thing that can mint a new `token` without the password. Distinct
+   * from `token` — conflating the two is what made every call fail with
+   * "Token invalide !".
+   */
   accessToken: string;
   cnKey?: string;
   cvKey?: string;
+  /**
+   * Account payload returned at login, kept so the client can be rebuilt
+   * offline on the next process start instead of burning a re-login just to
+   * find out which account and modules exist.
+   */
+  accounts: ProviderAccounts;
   updatedAt: string;
 }
 

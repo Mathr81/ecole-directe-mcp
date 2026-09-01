@@ -1,8 +1,7 @@
 // test/client/blocksDirecteAdapter.test.ts
 import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
 import { describe, expect, it } from 'vitest';
-import { assertRefreshSucceeded, patchBrokenModuleAvailabilityCheck } from '../../src/client/blocksDirecteAdapter.js';
-import { PossiblyExpiredSessionError } from '../../src/client/errors.js';
+import { patchBrokenModuleAvailabilityCheck } from '../../src/client/blocksDirecteAdapter.js';
 
 function makeFakeAccount(overrides: Partial<Account> = {}): Account {
   return {
@@ -58,19 +57,5 @@ describe('patchBrokenModuleAvailabilityCheck', () => {
     expect((client.timetable as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
     expect((client.schoollife as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
     expect((client.classlife as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
-  });
-});
-
-describe('assertRefreshSucceeded', () => {
-  it('throws PossiblyExpiredSessionError when the result has an empty token and no accounts', () => {
-    expect(() => assertRefreshSucceeded({ token: '', accounts: [] })).toThrow(PossiblyExpiredSessionError);
-  });
-
-  it('throws when accounts is empty even if a token is present', () => {
-    expect(() => assertRefreshSucceeded({ token: 'x', accounts: [] })).toThrow(PossiblyExpiredSessionError);
-  });
-
-  it('does not throw when both token and a non-empty accounts array are present', () => {
-    expect(() => assertRefreshSucceeded({ token: 'x', accounts: [{}] })).not.toThrow();
   });
 });

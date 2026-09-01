@@ -1855,6 +1855,63 @@ refresh attempt itself. Revisit only if the user asks to.
 
 ---
 
+### Amendment 3: authentication moved off `@blockshub/blocksdirecte` (implemented directly, no subagents, at the user's request)
+
+Amendment 2 made the failure legible but the server still could not serve a
+single call. Root cause, found by reading the compiled bundle and then
+confirmed against the live API with the user's own on-disk session:
+
+1. **We persisted the wrong secret.** École Directe issues two different
+   things: the short-lived session `token` (sent as `X-Token` on every data
+   call) and each account's long-lived `accessToken` (the per-device
+   credential that mints new session tokens). `sessionFromCredential` stored
+   `credential.token ?? account.accessToken` in a single `accessToken` field.
+   The library's `token` came back empty, so the fallback fired and the
+   *device credential* was stored where the *session token* belonged. Replaying
+   the stored value against `/v3/eleves/<id>/notes.awp` returns
+   `code 520 "Token invalide !"` — every data call was doomed regardless of
+   refresh. This is the actual reason "le MCP ne fonctionne pas".
+2. **`loginUsername`/`refreshToken` read the token only from the response
+   body.** École Directe also returns it in the `X-Token` *response header*
+   (and advertises it in `access-control-expose-headers`); the body field can
+   be empty on a success. That empty body field is what triggered (1).
+3. **`refreshToken` mis-reads errors.** Re-login against the real API answers
+   `code 526 "Votre session est invalide ou expirée"`; the library recognises
+   only 250 and 505, so 526 fell through to its success path. Confirmed with
+   four payload variants (with/without `fa`, empty `uuid`, `X-Token` header):
+   all 526, so the payload shape is right and the value is what's refused.
+4. **`refreshToken` writes to stdout** (`console.log(response.message)`),
+   which corrupts the JSON-RPC stream of the stdio transport.
+
+**Fix:** `src/client/edAuth.ts` implements login, the QCM exchange and
+re-login as direct `fetch` calls — token read from body *or* `X-Token`
+header, every response code mapped to a typed error, nothing written to
+stdout. The library is still used for all data modules (with Amendment 2's
+recursion patch); only auth is ours.
+
+Consequences elsewhere:
+
+- `Session` splits the two secrets into `token` and `accessToken`, and gains
+  `accounts` (the raw account payload, typed opaquely as `ProviderAccounts`
+  so no provider type leaks into `types.ts`).
+- `clientFor(session)` replaces `ensureClient`: it rebuilds the client from
+  the stored session with **no network call**, which finally answers the
+  design question Amendment 2 deliberately left open. It caches one client
+  per token — required, not just an optimisation, since BlocksDirecte's
+  `RESTManager` starts a `setInterval` in its constructor.
+- `serve` no longer refreshes at startup; an expired token now surfaces on
+  the first data call, where `withAutoRefresh` refreshes once and retries.
+- `readSession` rejects sessions lacking `token`/`accessToken`/`accounts` as
+  unusable, so a session file written before this amendment yields "run
+  login" instead of a 520 on every tool.
+- `mapErrorCode` maps 526 alongside 520/525; `withAutoRefresh` compares
+  `token` (the field that actually rotates) instead of `accessToken`.
+
+**Requires a fresh `login`:** the previously stored credential is refused
+with 526 and cannot be repaired in place.
+
+---
+
 ## Task 5: Pure BlocksDirecte → DTO mappers
 
 **Context for the implementer:** `@blockshub/blocksdirecte`'s bundled
