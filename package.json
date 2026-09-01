@@ -13,7 +13,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests",
-    "smoke-test": "tsx --env-file=.env scripts/smoke-test.ts"
+    "smoke-test": "tsx scripts/smoke-test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

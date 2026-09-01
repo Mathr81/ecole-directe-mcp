@@ -69,6 +69,17 @@ describe('mapSchoolLife', () => {
     );
     expect(entries.map((e) => e.id)).toEqual(['1', '2', '3']);
   });
+
+  it('tolerates a section École Directe omits entirely', () => {
+    // Observed against a real account: the payload came back with
+    // absencesRetards, dispenses, permisPoint and parametrage — and no
+    // sanctionsEncouragements key at all. The library's types promise it is
+    // always there.
+    const raw = makeRawSchoolLife({ absencesRetards: [makeRawAttendanceItem({ id: 1 })], dispenses: [] });
+    delete (raw as { sanctionsEncouragements?: unknown }).sanctionsEncouragements;
+
+    expect(mapSchoolLife(raw).map((e) => e.id)).toEqual(['1']);
+  });
 });
 
 describe('mapClassLife', () => {
@@ -81,6 +92,14 @@ describe('mapClassLife', () => {
     expect(summary.comments).toEqual([
       { id: '1', author: 'M. Martin', date: '2026-01-09', message: 'Bon travail cette semaine.' },
     ]);
+  });
+
+  it('returns an empty summary when École Directe has nothing for the class', () => {
+    // Observed against a real account: the endpoint answers `{}` — not an
+    // error, just no class-life content.
+    const summary = mapClassLife({} as Parameters<typeof mapClassLife>[0]);
+
+    expect(summary).toEqual({ className: '', content: '', updatedAt: '', comments: [] });
   });
 });
 

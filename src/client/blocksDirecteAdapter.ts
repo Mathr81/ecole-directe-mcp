@@ -81,9 +81,33 @@ function sessionFromAuthResult(
 }
 
 /**
- * One Client per session token. Not just an optimisation: BlocksDirecte's
- * RESTManager starts a `setInterval` in its constructor, so a Client built per
- * call would leak a timer per call and keep the process alive forever.
+ * BlocksDirecte's RESTManager starts a rate-limit `setInterval` in its
+ * constructor and discards the handle, so nothing can ever clear it: any
+ * short-lived process that builds a Client (the smoke test, a one-shot
+ * script) would print its results and then hang forever instead of exiting.
+ * Capture the timer while the constructor runs — `new Client()` is
+ * synchronous, so nothing else can register a timer in between — and unref
+ * it. The MCP server is held open by its stdio transport, not by this timer.
+ */
+function newClientWithoutKeepAlive(credential: Credential): Client {
+  const realSetInterval = globalThis.setInterval;
+  const captured: NodeJS.Timeout[] = [];
+  globalThis.setInterval = ((...args: Parameters<typeof globalThis.setInterval>) => {
+    const timer = realSetInterval(...args);
+    captured.push(timer);
+    return timer;
+  }) as typeof globalThis.setInterval;
+  try {
+    return new Client(credential);
+  } finally {
+    globalThis.setInterval = realSetInterval;
+    for (const timer of captured) timer.unref?.();
+  }
+}
+
+/**
+ * One Client per session token. Not just an optimisation: each one carries a
+ * RESTManager and its interval, so a Client per call would pile them up.
  */
 let cachedClient: { token: string; client: Client } | null = null;
 
@@ -94,7 +118,7 @@ let cachedClient: { token: string; client: Client } | null = null;
  * and modules exist; a token that has actually expired surfaces on the first
  * data call and is handled by `withAutoRefresh`.
  */
-function clientFor(session: Session): Client {
+export function clientFor(session: Session): Client {
   if (cachedClient && cachedClient.token === session.token) return cachedClient.client;
   const accounts = session.accounts as Account[] | undefined;
   if (!session.token || !accounts || accounts.length === 0) {
@@ -103,7 +127,7 @@ function clientFor(session: Session): Client {
     );
   }
   const credential: Credential = { token: session.token, accounts, selectedAccounts: 0 };
-  const client = new Client(credential);
+  const client = newClientWithoutKeepAlive(credential);
   patchBrokenModuleAvailabilityCheck(client);
   cachedClient = { token: session.token, client };
   return client;

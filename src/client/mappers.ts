@@ -69,22 +69,34 @@ export function mapTimetable(courses: TimetableCourse[]): TimetableSlot[] {
   }));
 }
 
+/**
+ * The library's types declare every section of a response as always present,
+ * but École Directe omits whole sections a school doesn't use: a real account
+ * returned a school-life payload with no `sanctionsEncouragements` key at all,
+ * and `{}` for the entire class-life payload. Both are normal answers, not
+ * errors, so the mappers must treat each section as optional rather than
+ * trusting the declared type.
+ */
+function asArray<T>(value: T[] | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export function mapSchoolLife(schoolLife: RawSchoolLife): SchoolLifeEntry[] {
-  const attendance: SchoolLifeEntry[] = schoolLife.absencesRetards.map((item) => ({
+  const attendance: SchoolLifeEntry[] = asArray(schoolLife.absencesRetards).map((item) => ({
     id: String(item.id),
     type: item.typeElement,
     date: item.date,
     description: item.libelle,
     justified: item.justifie,
   }));
-  const exemptions: SchoolLifeEntry[] = schoolLife.dispenses.map((item) => ({
+  const exemptions: SchoolLifeEntry[] = asArray(schoolLife.dispenses).map((item) => ({
     id: String(item.id),
     type: 'Dispense',
     date: item.date,
     description: item.libelle,
     justified: item.justifie,
   }));
-  const conduct: SchoolLifeEntry[] = schoolLife.sanctionsEncouragements.map((item) => ({
+  const conduct: SchoolLifeEntry[] = asArray(schoolLife.sanctionsEncouragements).map((item) => ({
     id: String(item.id),
     type: item.typeElement,
     date: item.date,
@@ -96,10 +108,10 @@ export function mapSchoolLife(schoolLife: RawSchoolLife): SchoolLifeEntry[] {
 
 export function mapClassLife(classLife: RawClassLife): ClassLifeSummary {
   return {
-    className: classLife.classe,
-    content: classLife.contenu,
+    className: classLife.classe ?? '',
+    content: classLife.contenu ?? '',
     updatedAt: classLife.matieres?.dateMiseAJour ?? '',
-    comments: classLife.commentaires.map((comment) => ({
+    comments: asArray(classLife.commentaires).map((comment) => ({
       id: String(comment.id),
       author: comment.auteur,
       date: comment.date,

@@ -1,7 +1,9 @@
 // test/client/blocksDirecteAdapter.test.ts
 import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
 import { describe, expect, it } from 'vitest';
-import { patchBrokenModuleAvailabilityCheck } from '../../src/client/blocksDirecteAdapter.js';
+import { clientFor, patchBrokenModuleAvailabilityCheck } from '../../src/client/blocksDirecteAdapter.js';
+import { AuthenticationRequiredError } from '../../src/client/errors.js';
+import { makeSession } from '../fakes/FakeEcoleDirecteClient.js';
 
 function makeFakeAccount(overrides: Partial<Account> = {}): Account {
   return {
@@ -57,5 +59,51 @@ describe('patchBrokenModuleAvailabilityCheck', () => {
     expect((client.timetable as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
     expect((client.schoollife as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
     expect((client.classlife as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
+  });
+});
+
+describe('clientFor', () => {
+  it('builds the client from the stored session without any network call', () => {
+    const client = clientFor(makeSession({ token: 'token-a', accounts: [makeFakeAccount()] }));
+
+    expect((client.marks as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
+  });
+
+  it('reuses the same client for the same token, and builds a new one when it rotates', () => {
+    const first = clientFor(makeSession({ token: 'token-b', accounts: [makeFakeAccount()] }));
+    const same = clientFor(makeSession({ token: 'token-b', accounts: [makeFakeAccount()] }));
+    const afterRotation = clientFor(makeSession({ token: 'token-c', accounts: [makeFakeAccount()] }));
+
+    expect(same).toBe(first);
+    expect(afterRotation).not.toBe(first);
+  });
+
+  it('unrefs the rate-limit interval so a short-lived process can still exit', () => {
+    // BlocksDirecte's RESTManager starts an interval it never keeps a handle
+    // to; left ref'd, it keeps the event loop alive forever.
+    const realSetInterval = globalThis.setInterval;
+    const captured: NodeJS.Timeout[] = [];
+    globalThis.setInterval = ((...args: Parameters<typeof globalThis.setInterval>) => {
+      const timer = realSetInterval(...args);
+      captured.push(timer);
+      return timer;
+    }) as typeof globalThis.setInterval;
+
+    try {
+      clientFor(makeSession({ token: 'token-d', accounts: [makeFakeAccount()] }));
+    } finally {
+      globalThis.setInterval = realSetInterval;
+    }
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured.every((timer) => timer.hasRef() === false)).toBe(true);
+    for (const timer of captured) clearInterval(timer);
+  });
+
+  it('refuses a session with no token or no accounts instead of failing later with "Token invalide"', () => {
+    expect(() => clientFor(makeSession({ token: '', accounts: [makeFakeAccount()] }))).toThrow(
+      AuthenticationRequiredError,
+    );
+    expect(() => clientFor(makeSession({ token: 'token-e', accounts: [] }))).toThrow(AuthenticationRequiredError);
   });
 });
