@@ -1658,6 +1658,7 @@ function makeFakeAccount(overrides: Partial<Account> = {}): Account {
     typeCompte: 'E' as Account['typeCompte'],
     modules: [{ code: 'NOTES', enable: true, ordre: 1, badge: 0, params: {} }],
     profile: { classe: { id: 1, code: 'X', libelle: 'X', estNote: 1 } } as Account['profile'],
+    ...overrides,
   } as Account;
 }
 
