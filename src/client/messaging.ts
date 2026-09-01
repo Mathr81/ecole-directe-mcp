@@ -8,9 +8,9 @@
  * account rather than inferred from documentation, and two of the plan's
  * original assumptions turned out to be wrong:
  *
- *  - `subject` is **plain text**, not base64. Only some deployments encode
- *    fields, so every text field goes through `decodeMaybeBase64`, which
- *    leaves plain text untouched.
+ *  - `subject` is **plain text**, not base64 — but `content` *is* base64,
+ *    MIME-wrapped across lines. Every text field goes through
+ *    `decodeMaybeBase64`, which handles both and leaves plain text alone.
  *  - The list endpoint returns `content: ''` for every message. Bodies exist
  *    only on the per-message endpoint, which is why reading a message is a
  *    separate call (and a separate tool) rather than a flag on the list.
@@ -61,9 +61,33 @@ function looksBase64(value: string): boolean {
   return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
+/**
+ * Rejects a decode that produced binary rather than text. Ignoring whitespace
+ * (below) widens what counts as base64 enough that short plain text can fall
+ * into it — "Test abcd" becomes the eight valid characters "Testabcd" — and
+ * decoding that yields mojibake. A replacement character means the bytes
+ * weren't valid UTF-8; control characters other than tab/CR/LF appear in no
+ * subject, filename or HTML body we care about.
+ */
+function isPlausibleText(value: string): boolean {
+  return value.length > 0 && !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFD]/.test(value);
+}
+
+/**
+ * École Directe wraps base64 bodies MIME-style, with a line break roughly
+ * every 76 characters — real messages came back with 16 and 2402 whitespace
+ * characters respectively. That whitespace breaks both the charset regex and
+ * the length-%-4 check, so a strict test concludes "not base64" and hands the
+ * caller a still-encoded body; `stripHtml` then finds no tags to remove and
+ * the message reaches the agent as raw base64, at full encoded size (194 KB
+ * for one message that is 142 characters of actual text).
+ */
 function decodeMaybeBase64(value: string | undefined): string {
   if (!value) return '';
-  return looksBase64(value) ? Buffer.from(value, 'base64').toString('utf8') : value;
+  const compact = value.replace(/\s+/g, '');
+  if (!looksBase64(compact)) return value;
+  const decoded = Buffer.from(compact, 'base64').toString('utf8');
+  return isPlausibleText(decoded) ? decoded : value;
 }
 
 function personName(person: RawPerson | undefined): string {

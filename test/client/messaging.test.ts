@@ -66,6 +66,74 @@ describe('mapMessageSummary', () => {
   });
 });
 
+describe('base64 decoding', () => {
+  /** Mimics École Directe's MIME-style wrapping: a line break every 76 chars. */
+  function wrapBase64(text: string): string {
+    const encoded = Buffer.from(text, 'utf8').toString('base64');
+    const wrapped = (encoded.match(/.{1,76}/g) ?? []).join('\r\n');
+    // A value short enough to fit on one line carries no whitespace and would
+    // pass a strict check too, so it would not exercise the bug at all.
+    if (!/\s/.test(wrapped)) throw new Error('fixture too short to wrap — it would not reproduce the bug');
+    return wrapped;
+  }
+
+  it('decodes a body whose base64 is wrapped across lines', () => {
+    // Real messages come back this way: 1376 chars with 16 whitespace
+    // characters, and one with 194586 chars containing 2402 of them. The
+    // whitespace breaks both the charset regex and the length-%-4 check, so a
+    // strict test leaves the body encoded and stripHtml finds no tags to
+    // remove — the message reaches the agent as raw base64.
+    const body =
+      '<p>Bonjour <b>Jean</b>,</p><p>La réunion parents-professeurs est reportée au 14 mars.</p>' +
+      '<p>Merci de confirmer votre présence auprès du secrétariat.</p><p>À demain.</p>';
+    const raw = makeRawMessage({ content: wrapBase64(body) });
+
+    expect(mapMessageDetail(raw, 'received').content).toBe(
+      'Bonjour Jean , La réunion parents-professeurs est reportée au 14 mars. ' +
+        'Merci de confirmer votre présence auprès du secrétariat. À demain.',
+    );
+  });
+
+  it('drops an inline data-URI image with the surrounding tags', () => {
+    // The 194586-char message was almost entirely one inline image; decoded and
+    // stripped it is 142 characters of actual text. Without the decode it would
+    // reach the agent's context at full size.
+    const html = `<p>Voir ci-dessous</p><img src="data:image/png;base64,${'A'.repeat(5000)}"/>`;
+    const raw = makeRawMessage({ content: wrapBase64(html) });
+
+    const { content } = mapMessageDetail(raw, 'received');
+
+    expect(content).toBe('Voir ci-dessous');
+    expect(content).not.toContain('data:image');
+  });
+
+  it('leaves plain text alone even when removing its spaces would make it valid base64', () => {
+    // Ignoring whitespace widens what counts as base64, and short plain text
+    // can land inside it: "Test abcd" -> "Testabcd" is 8 valid characters.
+    // Decoding it yields mojibake, so the decode has to be rejected.
+    for (const plain of ['Test abcd', 'Bonjour a tous']) {
+      expect(mapMessageSummary(makeRawMessage({ subject: plain }), 'received').subject).toBe(plain);
+    }
+  });
+
+  it('applies the same handling to attachment filenames', () => {
+    const raw = makeRawMessage({
+      content: '',
+      files: [
+        {
+          id: 5,
+          libelle: wrapBase64('convocation au conseil de classe du deuxieme trimestre - terminale.pdf'),
+          type: 'PIECE_JOINTE',
+        },
+      ],
+    });
+
+    expect(mapMessageDetail(raw, 'received').attachments[0].filename).toBe(
+      'convocation au conseil de classe du deuxieme trimestre - terminale.pdf',
+    );
+  });
+});
+
 describe('mapMessageDetail', () => {
   it('strips the HTML body and lists attachments', () => {
     const raw = makeRawMessage({

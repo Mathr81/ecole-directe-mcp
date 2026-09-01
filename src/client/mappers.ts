@@ -14,17 +14,37 @@ function parseFrenchNumber(raw: string | undefined): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: ' ',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function fromCodePoint(value: number, original: string): string {
+  return Number.isInteger(value) && value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : original;
+}
+
 export function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    html
+      .replace(/<[^>]*>/g, ' ')
+      // Entities are decoded in a single pass so a decoded value can never be
+      // decoded again: "&amp;#233;" is the literal text "&#233;", not "é".
+      // Numeric entities matter more than the named ones here — École Directe
+      // encodes every French accent that way ("chers &#233;l&#232;ves").
+      .replace(/&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (original, entity: string) => {
+        if (entity.startsWith('#x') || entity.startsWith('#X')) {
+          return fromCodePoint(Number.parseInt(entity.slice(2), 16), original);
+        }
+        if (entity.startsWith('#')) return fromCodePoint(Number.parseInt(entity.slice(1), 10), original);
+        return NAMED_ENTITIES[entity.toLowerCase()] ?? original;
+      })
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 export function mapGrades(notes: RawMark[]): Grade[] {

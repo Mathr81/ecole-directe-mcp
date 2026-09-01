@@ -29,6 +29,22 @@ describe('stripHtml', () => {
   it('removes tags, decodes common entities, and collapses whitespace', () => {
     expect(stripHtml('<p>Exercices 1 &amp; 5   page&nbsp;30</p>')).toBe('Exercices 1 & 5 page 30');
   });
+
+  it('decodes numeric entities, which is how École Directe encodes accents', () => {
+    // Real message bodies come back with "Chers parents, chers &#233;l&#232;ves"
+    // — leaving those raw makes the promised clean text unreadable in French.
+    expect(stripHtml('<p>Chers &#233;l&#232;ves, &#224; demain</p>')).toBe('Chers élèves, à demain');
+    expect(stripHtml('caf&#xE9; ferm&#XE9;')).toBe('café fermé');
+  });
+
+  it('does not decode an entity twice', () => {
+    // "&amp;#233;" means the literal text "&#233;", not "é".
+    expect(stripHtml('&amp;#233;')).toBe('&#233;');
+  });
+
+  it('leaves an unknown entity as written', () => {
+    expect(stripHtml('100 &euros; &#999999999999;')).toBe('100 &euros; &#999999999999;');
+  });
 });
 
 describe('mapHomework', () => {
