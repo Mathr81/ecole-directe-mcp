@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadOrCreateDeviceUUID, readSession, writeSession } from '../../src/store/sessionStore.js';
+import { loadOrCreateDeviceUUID, readSession, resolveDeviceIdPath, writeSession } from '../../src/store/sessionStore.js';
 import { makeSession } from '../fakes/FakeEcoleDirecteClient.js';
 
 describe('sessionStore', () => {
@@ -58,5 +58,31 @@ describe('sessionStore', () => {
 
   afterEach(async () => {
     await import('node:fs/promises').then((fs) => fs.rm(dir, { recursive: true, force: true }));
+  });
+});
+
+describe('resolveDeviceIdPath', () => {
+  it('prefers DEVICE_ID_PATH over the default location', () => {
+    // In a container the default sits outside the mounted volume, and losing
+    // the device id means answering École Directe's QCM again on every
+    // container recreation.
+    const previous = process.env.DEVICE_ID_PATH;
+    process.env.DEVICE_ID_PATH = '/data/device-id';
+    try {
+      expect(resolveDeviceIdPath()).toBe('/data/device-id');
+    } finally {
+      if (previous === undefined) delete process.env.DEVICE_ID_PATH;
+      else process.env.DEVICE_ID_PATH = previous;
+    }
+  });
+
+  it('falls back to the default when unset', () => {
+    const previous = process.env.DEVICE_ID_PATH;
+    delete process.env.DEVICE_ID_PATH;
+    try {
+      expect(resolveDeviceIdPath()).toContain('ecoledirecte-mcp');
+    } finally {
+      if (previous !== undefined) process.env.DEVICE_ID_PATH = previous;
+    }
   });
 });

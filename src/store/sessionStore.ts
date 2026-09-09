@@ -17,6 +17,16 @@ export function resolveSessionPath(): string {
 }
 
 /**
+ * Configurable for the same reason as the session path, and it matters more
+ * in a container: École Directe ties the QCM exemption to this device id, so
+ * losing it on every container recreation means answering the security
+ * questionnaire again every time.
+ */
+export function resolveDeviceIdPath(): string {
+  return process.env.DEVICE_ID_PATH ?? defaultDeviceIdPath();
+}
+
+/**
  * A session file is only usable if it carries both secrets and the account
  * list. Sessions written before those fields existed parse fine but produce
  * "Token invalide !" on every call, so they are treated as absent — the user
@@ -56,7 +66,7 @@ export async function writeSession(session: Session, path: string = resolveSessi
   await rename(tmpPath, path);
 }
 
-export async function loadOrCreateDeviceUUID(path: string = defaultDeviceIdPath()): Promise<string> {
+export async function loadOrCreateDeviceUUID(path: string = resolveDeviceIdPath()): Promise<string> {
   try {
     const existing = (await readFile(path, 'utf8')).trim();
     if (existing) return existing;

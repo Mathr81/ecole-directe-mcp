@@ -4552,10 +4552,17 @@ git commit -m "docs: README and manual smoke-test script"
   attachment's id, so `download_document` with `fileType` =
   `PIECE_JOINTE` can fetch it. Not smoke-tested — the account had no
   message with an attachment at the time.
-- **V2** (HTTP transport on the VPS's Tailscale interface, Docker image
-  for ARM64, `crypto.timingSafeEqual` bearer check, DNS rebinding
-  protection, `/health` route): separate plan, written after V1 is
-  verified end-to-end via the smoke test.
+- ~~**V2**~~: **done** — `src/transport/http.ts` (stateless
+  StreamableHTTP, bearer check via `timingSafeEqual` over SHA-256 digests,
+  `enableDnsRebindingProtection` + `allowedHosts`, `/health`), READ_ONLY
+  defaulting to true on that transport, `Dockerfile` (built natively on
+  arm64) and `docker-compose.yml` publishing the port on `TAILSCALE_IP`
+  only. Verified: image built and run on aarch64, real timetable served
+  from inside the container against the mounted session, healthcheck
+  reporting `healthy`, 401 without a token, 403 on an unlisted Host.
+  `DEVICE_ID_PATH` was added along the way — the device id defaulted
+  outside the mounted volume, which would have re-triggered the QCM on
+  every container recreation.
 
 ## Points to verify once Task 16's smoke test runs against a real account
 

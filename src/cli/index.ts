@@ -9,6 +9,7 @@ import { loadConfig } from '../config.js';
 import { loadOrCreateDeviceUUID, readSession, resolveSessionPath, writeSession } from '../store/sessionStore.js';
 import { runLoginFlow, type LoginIO } from './login.js';
 import { startStdioServer } from '../transport/stdio.js';
+import { MCP_PATH, startHttpServer } from '../transport/http.js';
 
 async function promptVisible(question: string): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout });
@@ -65,11 +66,10 @@ async function runLoginCommand(): Promise<void> {
 }
 
 async function runServeCommand(useHttp: boolean): Promise<void> {
-  if (useHttp) {
-    console.error('Le transport HTTP arrive en V2. Utilise `ecoledirecte-mcp serve` (stdio) pour l\'instant.');
-    process.exit(1);
-  }
-  const config = loadConfig();
+  // READ_ONLY defaults to true over HTTP: that transport is reachable from
+  // other machines on the tailnet, unlike stdio where the only caller is the
+  // user at their own keyboard. An explicit READ_ONLY=false still wins.
+  const config = loadConfig(process.env, { readOnlyDefault: useHttp });
   const base = createBlocksDirecteClient();
   // No refresh here: the stored session already carries everything the client
   // needs, and a re-login on every startup burns the one credential that can
@@ -84,7 +84,18 @@ async function runServeCommand(useHttp: boolean): Promise<void> {
 
   const sessionBox = createSessionBox(initialSession, (session) => writeSession(session, config.sessionPath));
   const client = createClient(base, sessionBox, { sessionMaxAgeMs: config.sessionMaxAgeMs });
-  await startStdioServer({ client, sessionBox, config });
+  const context = { client, sessionBox, config };
+
+  if (!useHttp) {
+    await startStdioServer(context);
+    return;
+  }
+
+  const { port } = await startHttpServer(context);
+  console.error(
+    `Serveur MCP HTTP à l'écoute sur http://${config.http.host}:${port}${MCP_PATH} ` +
+      `(lecture seule : ${config.readOnly}, hôtes autorisés : ${config.http.allowedHosts.join(', ')}).`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -92,6 +103,7 @@ async function main(): Promise<void> {
     allowPositionals: true,
     options: {
       http: { type: 'boolean', default: false },
+      port: { type: 'string' },
       'read-only': { type: 'boolean' },
     },
   });
@@ -99,12 +111,15 @@ async function main(): Promise<void> {
   if (values['read-only'] !== undefined) {
     process.env.READ_ONLY = String(values['read-only']);
   }
+  if (values.port !== undefined) {
+    process.env.MCP_HTTP_PORT = String(values.port);
+  }
   if (command === 'login') {
     await runLoginCommand();
   } else if (command === 'serve') {
     await runServeCommand(Boolean(values.http));
   } else {
-    console.error('Usage: ecoledirecte-mcp <login|serve> [--http] [--read-only]');
+    console.error('Usage: ecoledirecte-mcp <login|serve> [--http] [--port N] [--read-only]');
     process.exit(1);
   }
 }

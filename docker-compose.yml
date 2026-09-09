@@ -1,0 +1,25 @@
+services:
+  ecoledirecte-mcp:
+    build: .
+    image: ecoledirecte-mcp:local
+    restart: unless-stopped
+    # The port is published on the Tailscale address only. Writing just
+    # "8787:8787" would bind 0.0.0.0 on the host and expose the server to the
+    # open internet — TAILSCALE_IP is required for that reason, and compose
+    # fails to start if it is unset.
+    ports:
+      - "${TAILSCALE_IP:?définis TAILSCALE_IP dans .env (ex. 100.64.0.5, donné par `tailscale ip -4`)}:${MCP_HTTP_PORT:-8787}:8787"
+    environment:
+      # Required. Generate with: openssl rand -hex 32
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?définis MCP_AUTH_TOKEN dans .env}
+      # Host headers the DNS-rebinding guard accepts: whatever the clients
+      # actually put in the URL. Both the tailnet name and the raw IP, since
+      # either may be used.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-${TAILSCALE_IP}:${MCP_HTTP_PORT:-8787}}
+      READ_ONLY: ${READ_ONLY:-true}
+      SESSION_MAX_AGE_MS: ${SESSION_MAX_AGE_MS:-}
+    volumes:
+      - session:/data
+
+volumes:
+  session:

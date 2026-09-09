@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+.worktrees
+.superpowers
+docs
+test
+scripts
+coverage
+*.tsbuildinfo
+.env
+README.md
