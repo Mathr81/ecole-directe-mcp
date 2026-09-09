@@ -38,7 +38,7 @@ explicite au lieu de faire tomber le serveur.
 | `get_timeline` | Fil d'actualité personnel |
 | `get_messages` | Liste les messages d'un dossier (en-têtes seulement) |
 | `read_message` | Contenu d'un message, HTML retiré, avec ses pièces jointes |
-| `download_document` | Télécharge un document dans `DOWNLOAD_DIR` et renvoie son chemin |
+| `download_document` | Télécharge un document dans `DOWNLOAD_DIR`, sous son vrai nom, et renvoie son chemin |
 
 La messagerie est en deux outils parce que l'API l'impose : la liste
 renvoie `content: ""` pour chaque message, les corps n'existent que sur
@@ -81,7 +81,16 @@ implémentée directement dans `src/client/edAuth.ts` plutôt que déléguée à
 Les modules de données de la librairie restent utilisés, avec un correctif
 pour une récursion infinie dans leur vérification de module disponible
 (`patchBrokenModuleAvailabilityCheck`). La messagerie, absente de la
-librairie, est également en HTTP direct (`src/client/messaging.ts`).
+librairie, est en HTTP direct (`src/client/messaging.ts`), ainsi que le
+téléchargement (`src/client/download.ts`) : `downloader.getStream()` jette
+les en-têtes de réponse, donc le vrai nom de fichier — porté par
+`Content-Disposition` — était perdu et chaque document atterrissait sur le
+disque nommé d'après son identifiant numérique, sans extension.
+
+À noter : un téléchargement en échec répond quand même **HTTP 200**. École
+Directe met son propre code dans l'en-tête `X-Code` (403 pour un
+identifiant inconnu, avec une page d'erreur HTML en guise de contenu), ce
+que le code vérifie avant d'écrire quoi que ce soit sur le disque.
 
 ## Limitations connues (V1)
 

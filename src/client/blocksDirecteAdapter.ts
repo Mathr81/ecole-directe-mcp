@@ -1,8 +1,3 @@
-import { createWriteStream } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
 import { edGet2FAQuestion, edLogin, edRelogin, edSend2FAAnswer, type AuthResult } from './edAuth.js';
 import {
@@ -13,6 +8,7 @@ import {
   wrapCall,
 } from './errors.js';
 import { mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
+import { fetchDocument } from './download.js';
 import { fetchMessage, fetchMessages } from './messaging.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
 
@@ -251,18 +247,10 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
       return wrapCall(() => fetchMessage(session, messageId));
     },
 
+    // Direct HTTP, not client.downloader: the library's getStream() drops the
+    // response headers that carry the real filename.
     async downloadDocument(session, fileId, fileType, destinationDir) {
-      return wrapCall(async () => {
-        const client = clientFor(session);
-        const stream = await client.downloader.getStream(Number(fileId), fileType);
-        if (!stream) throw new Error(`École Directe returned no content for document ${fileId}`);
-        await mkdir(destinationDir, { recursive: true });
-        const filename = fileId;
-        const path = join(destinationDir, filename);
-        await pipeline(Readable.fromWeb(stream), createWriteStream(path));
-        const { size } = await stat(path);
-        return { path, filename, mimeType: 'application/octet-stream', sizeBytes: size };
-      });
+      return wrapCall(() => fetchDocument(session, fileId, fileType, destinationDir));
     },
 
     async getAuthStatus(session) {

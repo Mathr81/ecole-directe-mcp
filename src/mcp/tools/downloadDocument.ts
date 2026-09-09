@@ -9,10 +9,15 @@ export function registerDownloadDocument(server: McpServer, context: ToolContext
     {
       title: 'Télécharger un document',
       description:
-        "Télécharge un document (bulletin, pièce jointe...) depuis École Directe et l'enregistre sur disque. Renvoie le chemin du fichier, pas son contenu.",
+        "Télécharge un document (bulletin, pièce jointe...) depuis École Directe et l'enregistre sur disque sous son vrai nom. Renvoie le chemin du fichier, pas son contenu.",
       inputSchema: {
         fileId: z.string().describe('Identifiant du fichier École Directe'),
-        fileType: z.string().describe('Type de fichier École Directe (ex: "PJ", "CDT")'),
+        fileType: z
+          .string()
+          .describe(
+            'Type de fichier École Directe : "PIECE_JOINTE" (pièce jointe d\'un message), ' +
+              '"FICHIER_CDT" (cahier de textes), "CLOUD" (fichier du cloud). Vide pour un document administratif.',
+          ),
       },
     },
     async ({ fileId, fileType }) =>
