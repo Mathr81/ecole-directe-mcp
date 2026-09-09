@@ -4563,6 +4563,21 @@ git commit -m "docs: README and manual smoke-test script"
   `DEVICE_ID_PATH` was added along the way — the device id defaulted
   outside the mounted volume, which would have re-triggered the QCM on
   every container recreation.
+- ~~**Public exposure / OAuth**~~: **done**, and it turned out to be
+  required rather than optional. A Claude.ai custom connector is fetched
+  by Anthropic's servers, not by the user's device, so Tailscale can
+  never serve that case. Claude supports a fixed bearer header only
+  through `static_headers` (beta, org-administrator scoped), so the
+  server now implements a full OAuth 2.0 authorization server:
+  `src/oauth/` (persistent store keeping only SHA-256 digests, provider,
+  consent screen) on top of the SDK's `mcpAuthRouter` — RFC 8414/9728
+  metadata, DCR, PKCE S256, refresh-token rotation, typed
+  `invalid_grant` errors. Consent is a passphrase prompt, since the
+  server has exactly one account. The plan's original "annexe optionnelle
+  avec allowlist d'IP" is realised as Anthropic's published egress range
+  `160.79.104.0/21` allowlisted in Nginx Proxy Manager. Verified live:
+  full discovery → DCR → consent → code → token → real timetable, plus
+  refresh rotation rejecting the replayed token with `invalid_grant`.
 
 ## Points to verify once Task 16's smoke test runs against a real account
 

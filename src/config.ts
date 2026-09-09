@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { defaultSessionPath } from './store/sessionStore.js';
 
 export interface HttpConfig {
@@ -12,12 +12,27 @@ export interface HttpConfig {
   allowedHosts: string[];
 }
 
+export interface OAuthConfig {
+  /** Enabled only when both the public URL and the passphrase are set. */
+  enabled: boolean;
+  /**
+   * The exact MCP endpoint URL as typed into Claude, e.g.
+   * https://ed.example.com/mcp. It is the RFC 8707 resource identifier and
+   * must match the protected resource metadata exactly, path included.
+   */
+  publicUrl: string;
+  /** Owner passphrase for the consent screen. */
+  passphrase: string;
+  storePath: string;
+}
+
 export interface Config {
   sessionPath: string;
   downloadDir: string;
   readOnly: boolean;
   sessionMaxAgeMs: number;
   http: HttpConfig;
+  oauth: OAuthConfig;
 }
 
 const DEFAULT_SESSION_MAX_AGE_MS = 15 * 60 * 1000;
@@ -57,6 +72,10 @@ function parseList(raw: string | undefined): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function defaultOAuthStorePath(sessionPath: string): string {
+  return join(dirname(sessionPath), 'oauth-store.json');
+}
+
 export function loadConfig(
   env: Record<string, string | undefined> = process.env,
   options: LoadConfigOptions = {},
@@ -64,8 +83,11 @@ export function loadConfig(
   const host = env.MCP_HTTP_HOST ?? DEFAULT_HTTP_HOST;
   const port = parsePositiveInt(env.MCP_HTTP_PORT, DEFAULT_HTTP_PORT);
   const configuredHosts = parseList(env.MCP_ALLOWED_HOSTS);
+  const sessionPath = env.SESSION_PATH ?? defaultSessionPath();
+  const publicUrl = env.MCP_PUBLIC_URL ?? '';
+  const passphrase = env.MCP_OAUTH_PASSPHRASE ?? '';
   return {
-    sessionPath: env.SESSION_PATH ?? defaultSessionPath(),
+    sessionPath,
     downloadDir: env.DOWNLOAD_DIR ?? join(homedir(), '.local', 'share', 'ecoledirecte-mcp', 'downloads'),
     readOnly: parseBoolean(env.READ_ONLY, options.readOnlyDefault ?? false),
     sessionMaxAgeMs: parsePositiveInt(env.SESSION_MAX_AGE_MS, DEFAULT_SESSION_MAX_AGE_MS),
@@ -76,6 +98,12 @@ export function loadConfig(
       // The bound address is always acceptable; anything else has to be named
       // explicitly, since the guard's whole job is to reject unexpected Hosts.
       allowedHosts: configuredHosts.length > 0 ? configuredHosts : [`${host}:${port}`, host],
+    },
+    oauth: {
+      enabled: publicUrl !== '' && passphrase !== '',
+      publicUrl,
+      passphrase,
+      storePath: env.MCP_OAUTH_STORE_PATH ?? defaultOAuthStorePath(sessionPath),
     },
   };
 }

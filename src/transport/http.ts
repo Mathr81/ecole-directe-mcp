@@ -1,10 +1,26 @@
 /**
- * HTTP transport (V2). Meant to run on the VPS and be reached over Tailscale,
- * never published to the open internet — see `DEFAULT_HTTP_HOST` in config.ts.
+ * HTTP transport.
+ *
+ * Two deployments share this code:
+ *
+ *  - **Tailnet**: reached from the user's own machines, authenticated by a
+ *    fixed `MCP_AUTH_TOKEN`, published only on the Tailscale address.
+ *  - **Public**: reached by Anthropic's servers so the endpoint can be added
+ *    as a Claude.ai custom connector, authenticated by OAuth. A custom
+ *    connector is fetched by Anthropic's infrastructure rather than by the
+ *    user's device, so a tailnet-only address can never serve that case.
+ *
+ * Either credential is accepted when both are configured; at least one must
+ * be, or the server refuses to start.
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { Server } from 'node:http';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { buildServer, type ToolContext } from '../mcp/server.js';
+import { CONSENT_PATH, EcoleDirecteOAuthProvider, SUPPORTED_SCOPES } from '../oauth/provider.js';
+import { OAuthStore } from '../oauth/store.js';
 import { isAuthorized } from './httpAuth.js';
 
 export const MCP_PATH = '/mcp';
@@ -17,22 +33,7 @@ export interface StartHttpServerResult {
   close(): Promise<void>;
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
-  res.end(payload);
-}
-
-/**
- * Health check: unauthenticated on purpose, so infrastructure can probe it,
- * and therefore deliberately uninformative — whether a session exists, and
- * nothing that identifies the account or its data.
- */
-function handleHealth(context: ToolContext, res: ServerResponse): void {
-  sendJson(res, 200, { status: 'ok', sessionExists: context.sessionBox.get() !== null });
-}
-
-async function handleMcp(context: ToolContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleMcp(context: ToolContext, req: Request, res: Response): Promise<void> {
   // Stateless: a fresh server and transport per request. There is no
   // server-to-client push to keep alive, and per-request instances avoid
   // request-id collisions between concurrent callers.
@@ -48,51 +49,108 @@ async function handleMcp(context: ToolContext, req: IncomingMessage, res: Server
     void server.close();
   });
   await server.connect(transport);
-  await transport.handleRequest(req, res);
+  await transport.handleRequest(req, res, req.body);
 }
 
 export async function startHttpServer(context: ToolContext): Promise<StartHttpServerResult> {
   const { host, port, authToken } = context.config.http;
-  if (!authToken) {
+  const oauth = context.config.oauth;
+
+  if (!authToken && !oauth.enabled) {
     throw new Error(
-      'MCP_AUTH_TOKEN est vide : le transport HTTP refuse de démarrer sans jeton. ' +
-        'Génère-en un avec `openssl rand -hex 32` et mets-le dans MCP_AUTH_TOKEN.',
+      "Le transport HTTP n'a aucun moyen d'authentifier ses appelants. Définis MCP_AUTH_TOKEN " +
+        '(`openssl rand -hex 32`) pour un accès par jeton fixe, et/ou MCP_PUBLIC_URL + ' +
+        'MCP_OAUTH_PASSPHRASE pour OAuth (connecteur Claude.ai).',
     );
   }
 
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const app = express();
+  // Exactly one hop — Nginx Proxy Manager. `true` would trust any
+  // X-Forwarded-For a caller sends, which lets anyone spoof their address and
+  // walk straight past the rate limiting the SDK's auth router applies to
+  // /authorize, /token and /register.
+  app.set('trust proxy', 1);
+  app.disable('x-powered-by');
 
-    if (url.pathname === HEALTH_PATH && req.method === 'GET') {
-      handleHealth(context, res);
-      return;
-    }
-
-    if (url.pathname !== MCP_PATH) {
-      sendJson(res, 404, { error: 'not_found' });
-      return;
-    }
-
-    if (!isAuthorized(req.headers.authorization, authToken)) {
-      // No hint about why: a caller either has the token or does not.
-      sendJson(res, 401, { error: 'unauthorized' });
-      return;
-    }
-
-    handleMcp(context, req, res).catch((error: unknown) => {
-      // stderr only — stdout is not a protocol channel here, but keeping the
-      // habit means the same code is safe if it is ever reused under stdio.
-      console.error('Erreur pendant le traitement d\'une requête MCP :', error);
-      if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
-    });
+  // Health check: unauthenticated on purpose, so infrastructure can probe it,
+  // and therefore deliberately uninformative — whether a session exists, and
+  // nothing that identifies the account or its data.
+  app.get(HEALTH_PATH, (_req, res) => {
+    res.json({ status: 'ok', sessionExists: context.sessionBox.get() !== null });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, () => {
-      server.removeListener('error', reject);
-      resolve();
+  let oauthGuard: ReturnType<typeof requireBearerAuth> | undefined;
+
+  if (oauth.enabled) {
+    const provider = new EcoleDirecteOAuthProvider({
+      store: new OAuthStore(oauth.storePath),
+      passphrase: oauth.passphrase,
+      resourceUrl: oauth.publicUrl,
     });
+    const resourceUrl = new URL(oauth.publicUrl);
+    const issuerUrl = new URL(resourceUrl.origin);
+
+    app.post(CONSENT_PATH, express.urlencoded({ extended: false }), (req, res, next) => {
+      const body = req.body as { pending?: string; passphrase?: string };
+      provider.handleConsent(res, body.pending ?? '', body.passphrase ?? '').catch(next);
+    });
+
+    // Must be mounted at the application root: it owns /authorize, /token,
+    // /register, /revoke and the /.well-known metadata documents.
+    app.use(
+      mcpAuthRouter({
+        provider,
+        issuerUrl,
+        resourceServerUrl: resourceUrl,
+        scopesSupported: SUPPORTED_SCOPES,
+        resourceName: 'École Directe MCP',
+      }),
+    );
+
+    oauthGuard = requireBearerAuth({
+      verifier: provider,
+      // Points Claude at the protected resource metadata from the 401, which
+      // is the handshake that tells it where the authorization server is.
+      resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceUrl),
+    });
+  }
+
+  function authenticate(req: Request, res: Response, next: NextFunction): void {
+    // The fixed token short-circuits; anything else falls through to OAuth so
+    // Claude still receives a spec-shaped 401 with WWW-Authenticate.
+    if (authToken && isAuthorized(req.headers.authorization, authToken)) {
+      next();
+      return;
+    }
+    if (oauthGuard) {
+      oauthGuard(req, res, next);
+      return;
+    }
+    // No hint about why: a caller either has the token or does not.
+    res.status(401).json({ error: 'unauthorized' });
+  }
+
+  app.all(MCP_PATH, express.json({ limit: '4mb' }), authenticate, (req, res, next) => {
+    handleMcp(context, req, res).catch(next);
+  });
+
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'not_found' });
+  });
+
+  app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+    // stderr only — stdout is not a protocol channel here, but keeping the
+    // habit means the same code is safe if it is ever reused under stdio.
+    console.error('Erreur pendant le traitement d\'une requête HTTP :', error);
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
+  });
+
+  const server = await new Promise<Server>((resolve, reject) => {
+    const listening = app.listen(port, host, () => {
+      listening.removeListener('error', reject);
+      resolve(listening);
+    });
+    listening.once('error', reject);
   });
 
   const address = server.address();

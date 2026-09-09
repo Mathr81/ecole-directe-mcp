@@ -3,19 +3,27 @@ services:
     build: .
     image: ecoledirecte-mcp:local
     restart: unless-stopped
-    # The port is published on the Tailscale address only. Writing just
-    # "8787:8787" would bind 0.0.0.0 on the host and expose the server to the
-    # open internet — TAILSCALE_IP is required for that reason, and compose
-    # fails to start if it is unset.
+    # The port is published on one explicit address. Writing just "8787:8787"
+    # would bind 0.0.0.0 on the host and expose the server to the open
+    # internet, so the address is required and compose fails without it.
+    #   - tailnet deployment: the Tailscale IP (`tailscale ip -4`)
+    #   - behind Nginx Proxy Manager on the host: 127.0.0.1
+    #   - behind Nginx Proxy Manager in Docker: use docker-compose.npm.yml
+    #     instead, which drops this published port and joins NPM's network.
     ports:
-      - "${TAILSCALE_IP:?définis TAILSCALE_IP dans .env (ex. 100.64.0.5, donné par `tailscale ip -4`)}:${MCP_HTTP_PORT:-8787}:8787"
+      - "${PUBLISH_ADDRESS:?définis PUBLISH_ADDRESS dans .env — IP Tailscale (`tailscale ip -4`) ou 127.0.0.1 derrière un reverse proxy}:${MCP_HTTP_PORT:-8787}:8787"
     environment:
-      # Required. Generate with: openssl rand -hex 32
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?définis MCP_AUTH_TOKEN dans .env}
+      # At least one authentication method is required; the server refuses to
+      # start with neither.
+      # Fixed token, for your own machines. Generate: openssl rand -hex 32
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      # OAuth, required for a Claude.ai custom connector. MCP_PUBLIC_URL is the
+      # exact URL typed into Claude, path included.
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-}
+      MCP_OAUTH_PASSPHRASE: ${MCP_OAUTH_PASSPHRASE:-}
       # Host headers the DNS-rebinding guard accepts: whatever the clients
-      # actually put in the URL. Both the tailnet name and the raw IP, since
-      # either may be used.
-      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-${TAILSCALE_IP}:${MCP_HTTP_PORT:-8787}}
+      # really put in the URL — the public domain when behind a proxy.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-${PUBLISH_ADDRESS}:${MCP_HTTP_PORT:-8787}}
       READ_ONLY: ${READ_ONLY:-true}
       SESSION_MAX_AGE_MS: ${SESSION_MAX_AGE_MS:-}
     volumes:

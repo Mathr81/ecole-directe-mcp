@@ -1,0 +1,22 @@
+# Override for the case where Nginx Proxy Manager itself runs in Docker.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.npm.yml up -d
+#
+# No port is published on the host at all: NPM reaches the container by service
+# name over a shared Docker network, so nothing is listening on the host and
+# the only way in is through the proxy. In NPM, forward to:
+#
+#   Scheme http, Forward Hostname ecoledirecte-mcp, Forward Port 8787
+#
+# Set NPM_NETWORK in .env to the network NPM is attached to
+# (`docker network ls` — often npm_default or nginx-proxy-manager_default).
+services:
+  ecoledirecte-mcp:
+    ports: !reset []
+    networks:
+      - npm
+
+networks:
+  npm:
+    external: true
+    name: ${NPM_NETWORK:?définis NPM_NETWORK dans .env — le réseau Docker de Nginx Proxy Manager}

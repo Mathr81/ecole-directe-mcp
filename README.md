@@ -126,9 +126,10 @@ monkey-patch, une montée de version silencieuse casserait ces correctifs.
 Le transport HTTP est fait pour être joignable **depuis le tailnet et nulle
 part ailleurs**. Trois protections se cumulent :
 
-1. Le port n'est publié que sur l'adresse Tailscale du VPS. `docker-compose.yml`
-   exige `TAILSCALE_IP` et refuse de démarrer sans — écrire `8787:8787` aurait
-   lié `0.0.0.0` sur l'hôte et exposé le serveur à l'internet ouvert.
+1. Le port n'est publié que sur une adresse explicite. `docker-compose.yml`
+   exige `PUBLISH_ADDRESS` et refuse de démarrer sans — écrire `8787:8787`
+   aurait lié `0.0.0.0` sur l'hôte et exposé le serveur à l'internet ouvert.
+   Pour un déploiement tailnet, mets-y l'IP Tailscale du VPS.
 2. Chaque requête `/mcp` doit porter `Authorization: Bearer $MCP_AUTH_TOKEN`.
    La comparaison passe par `timingSafeEqual` sur des empreintes SHA-256 :
    à temps constant, et sans fuir la longueur du jeton attendu.
@@ -143,7 +144,7 @@ ton clavier. `mark_homework_done` disparaît alors de la liste des outils.
 
 ### Mise en route
 
-    cp .env.example .env      # renseigner MCP_AUTH_TOKEN et TAILSCALE_IP
+    cp .env.example .env      # renseigner MCP_AUTH_TOKEN et PUBLISH_ADDRESS
     docker compose build      # build natif arm64 sur le VPS Ampere
     docker compose run --rm -it ecoledirecte-mcp login
     docker compose up -d
@@ -170,10 +171,82 @@ Le transport est **sans état** (pas de `mcp-session-id`) : le serveur est
 mono-utilisateur et ne pousse rien vers le client, donc il n'y a aucun cycle
 de vie de session à gérer côté serveur.
 
+## Exposition publique, pour un connecteur Claude.ai
+
+Un connecteur personnalisé Claude.ai est appelé par **les serveurs
+d'Anthropic**, pas par ton appareil : la doc exige un serveur « reachable over
+the public internet from Anthropic's IP ranges ». **Tailscale ne peut donc pas
+servir ce cas** — même installé sur tous tes appareils, l'endpoint resterait
+injoignable pour Anthropic. Une exposition publique est la seule voie.
+
+### Ce qui limite les dégâts
+
+Anthropic publie sa plage de sortie, `160.79.104.0/21`. En l'allowlistant dans
+Nginx Proxy Manager, le domaine est public dans le DNS mais seule
+l'infrastructure d'Anthropic peut lui parler : un scanner se fait refouler
+avant même d'atteindre l'authentification. Onglet **Advanced** du Proxy Host :
+
+```nginx
+allow 160.79.104.0/21;
+deny all;
+
+# Streamable HTTP peut ouvrir un flux SSE sur GET /mcp :
+proxy_buffering off;
+proxy_read_timeout 3600s;
+```
+
+Plus un certificat Let's Encrypt avec *Force SSL*. Garde `READ_ONLY=true`.
+
+### Authentification : OAuth
+
+Claude ne sait pas envoyer un en-tête fixe sur un connecteur personnalisé,
+sauf via `static_headers`, en beta et réservé à un administrateur
+d'organisation. Le serveur implémente donc un **serveur d'autorisation OAuth
+2.0** complet : métadonnées RFC 8414 et RFC 9728, enregistrement dynamique de
+client (RFC 7591), PKCE S256, rotation des refresh tokens, `401` avec
+`WWW-Authenticate` pointant vers les métadonnées de ressource.
+
+Comme le serveur ne dessert qu'un seul compte, l'« utilisateur » OAuth est
+toujours toi : le consentement est un écran qui demande
+`MCP_OAUTH_PASSPHRASE`. Anthropic impose un humain dans la boucle — un flux
+purement machine-à-machine n'est pas accepté. Cinq mauvaises réponses brûlent
+la demande en cours.
+
+Clients enregistrés et jetons sont persistés sur le volume, en **empreintes
+SHA-256** : le serveur n'a jamais besoin de relire un jeton, seulement de
+vérifier une correspondance, donc une fuite du fichier ne donne aucun
+identifiant utilisable. La persistance évite aussi que le connecteur casse à
+chaque `docker compose up`.
+
+### Mise en route
+
+Dans `.env` :
+
+    MCP_PUBLIC_URL=https://ed.ton-domaine.fr/mcp
+    MCP_OAUTH_PASSPHRASE=<une phrase longue>
+    MCP_ALLOWED_HOSTS=ed.ton-domaine.fr
+    READ_ONLY=true
+
+Si NPM tourne **en conteneur**, aucun port n'est publié sur l'hôte : le proxy
+joint le service par son nom sur un réseau Docker partagé.
+
+    docker compose -f docker-compose.yml -f docker-compose.npm.yml up -d
+
+avec `NPM_NETWORK` réglé sur le réseau de NPM (`docker network ls`), et dans
+NPM : *Scheme* `http`, *Forward Hostname* `ecoledirecte-mcp`, *Forward Port*
+`8787`. Si NPM tourne sur l'hôte, garde `docker-compose.yml` seul avec
+`PUBLISH_ADDRESS=127.0.0.1`.
+
+Ensuite, dans Claude.ai : Paramètres → Connecteurs → connecteur personnalisé,
+URL `https://ed.ton-domaine.fr/mcp`. Claude découvre le serveur
+d'autorisation, s'enregistre, et t'affiche l'écran de consentement où tu
+saisis la phrase secrète.
+
 ## Statut
 
-V1 (stdio, local) et V2 (HTTP, Docker, Tailscale) sont faites. Un outil
-d'envoi de messages reste volontairement non implémenté.
+stdio (local), HTTP sur tailnet, et HTTP public avec OAuth pour un connecteur
+Claude.ai sont faits. Un outil d'envoi de messages reste volontairement non
+implémenté.
 
 La messagerie est en **lecture seule** : lister et lire. Envoyer, répondre
 et transférer ne sont pas implémentés — ce sont des écritures visibles par
