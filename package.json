@@ -16,7 +16,7 @@
     "smoke-test": "tsx scripts/smoke-test.ts"
   },
   "dependencies": {
-    "@blockshub/blocksdirecte": "0.0.9-alpha",
+    "@blockshub/blocksdirecte": "0.0.10-alpha",
     "@modelcontextprotocol/sdk": "1.30.0",
     "express": "5.2.1",
     "zod": "4.5.4"

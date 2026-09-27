@@ -21,34 +21,6 @@ function assertPresent<T>(value: T | null | undefined, context: string): T {
   return value;
 }
 
-interface PatchableModule {
-  credentials: Credential;
-  moduleName?: string;
-  isModuleAvailableForSelectedAccount(): boolean;
-}
-
-const PATCHED_MODULE_KEYS = ['marks', 'homework', 'timetable', 'schoollife', 'classlife'] as const;
-
-/**
- * Works around a confirmed bug in @blockshub/blocksdirecte@0.0.9-alpha:
- * Modules.prototype.isModuleAvailableForSelectedAccount calls
- * this.getSelectedAccount(), which calls back into
- * isModuleAvailableForSelectedAccount() — unconditional recursion for
- * every module built with a moduleName (these five; timeline/downloader
- * are unaffected). This reimplements the intended check directly against
- * the credentials the caller already validated, with no recursion.
- * Remove once fixed upstream.
- */
-export function patchBrokenModuleAvailabilityCheck(client: Client): void {
-  for (const key of PATCHED_MODULE_KEYS) {
-    const moduleInstance = client[key] as unknown as PatchableModule;
-    moduleInstance.isModuleAvailableForSelectedAccount = function (this: PatchableModule): boolean {
-      const account: Account = this.credentials.accounts[this.credentials.selectedAccounts];
-      return account.modules.some((entry) => entry.code === this.moduleName);
-    };
-  }
-}
-
 /**
  * Turns an authentication result into the session we persist. Note that
  * `token` and `accessToken` are two different secrets: `token` is the
@@ -125,7 +97,6 @@ export function clientFor(session: Session): Client {
   }
   const credential: Credential = { token: session.token, accounts, selectedAccounts: 0 };
   const client = newClientWithoutKeepAlive(credential);
-  patchBrokenModuleAvailabilityCheck(client);
   cachedClient = { token: session.token, client };
   return client;
 }

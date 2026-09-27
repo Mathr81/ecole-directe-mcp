@@ -1,7 +1,7 @@
 // test/client/blocksDirecteAdapter.test.ts
 import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
 import { describe, expect, it } from 'vitest';
-import { clientFor, patchBrokenModuleAvailabilityCheck } from '../../src/client/blocksDirecteAdapter.js';
+import { clientFor } from '../../src/client/blocksDirecteAdapter.js';
 import { AuthenticationRequiredError } from '../../src/client/errors.js';
 import { makeSession } from '../fakes/FakeEcoleDirecteClient.js';
 
@@ -19,10 +19,13 @@ function makeFakeCredential(account: Account): Credential {
   return { token: 'fake-token', accounts: [account], selectedAccounts: 0 };
 }
 
-describe('patchBrokenModuleAvailabilityCheck', () => {
+// Regression guard for the library itself: 0.0.9-alpha recursed forever in
+// isModuleAvailableForSelectedAccount, and we monkey-patched it. 0.0.10-alpha
+// fixed it upstream and the patch is gone — these fail loudly if a future
+// version brings the recursion back.
+describe('BlocksDirecte module availability check (unpatched)', () => {
   it('returns the selected account without recursing, for a module present on the account', () => {
     const client = new Client(makeFakeCredential(makeFakeAccount()));
-    patchBrokenModuleAvailabilityCheck(client);
 
     const account = (client.marks as unknown as { getSelectedAccount(): Account }).getSelectedAccount();
 
@@ -31,14 +34,13 @@ describe('patchBrokenModuleAvailabilityCheck', () => {
 
   it('reports a module as unavailable when the account does not list it', () => {
     const client = new Client(makeFakeCredential(makeFakeAccount({ modules: [] })));
-    patchBrokenModuleAvailabilityCheck(client);
 
     const available = (client.marks as unknown as { isModuleAvailableForSelectedAccount(): boolean }).isModuleAvailableForSelectedAccount();
 
     expect(available).toBe(false);
   });
 
-  it('patches all five affected modules (marks, homework, timetable, schoollife, classlife)', () => {
+  it('works for all five modules built with a moduleName (marks, homework, timetable, schoollife, classlife)', () => {
     const client = new Client(
       makeFakeCredential(
         makeFakeAccount({
@@ -52,7 +54,6 @@ describe('patchBrokenModuleAvailabilityCheck', () => {
         }),
       ),
     );
-    patchBrokenModuleAvailabilityCheck(client);
 
     expect((client.marks as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);
     expect((client.homework as unknown as { getSelectedAccount(): Account }).getSelectedAccount().id).toBe(12345);

@@ -86,9 +86,11 @@ implémentée directement dans `src/client/edAuth.ts` plutôt que déléguée à
    et produit une session vide qui ressemble à une réussite ;
 3. écrit sur **stdout**, ce qui corrompt le flux JSON-RPC du transport stdio.
 
-Les modules de données de la librairie restent utilisés, avec un correctif
-pour une récursion infinie dans leur vérification de module disponible
-(`patchBrokenModuleAvailabilityCheck`). La messagerie, absente de la
+Les modules de données de la librairie restent utilisés. La récursion
+infinie de leur vérification de module disponible, qu'on corrigeait par
+monkey-patch en `0.0.9-alpha`, est réparée en amont depuis `0.0.10-alpha` ;
+des tests vérifient que la librairie non patchée ne la réintroduit pas.
+La messagerie, absente de la
 librairie, est en HTTP direct (`src/client/messaging.ts`), ainsi que le
 téléchargement (`src/client/download.ts`) : `downloader.getStream()` jette
 les en-têtes de réponse, donc le vrai nom de fichier — porté par
@@ -117,9 +119,11 @@ tout seul — relancer `login` dans ce cas.
 `SESSION_MAX_AGE_MS` sont une valeur prudente, pas une valeur observée. À
 calibrer à l'usage (voir « Développement » ci-dessous).
 
-**`@blockshub/blocksdirecte` est épinglé** à la version exacte `0.0.9-alpha`
-(pas de `^`) : c'est une version alpha dont on corrige des bugs par
-monkey-patch, une montée de version silencieuse casserait ces correctifs.
+**`@blockshub/blocksdirecte` est épinglé** à la version exacte `0.0.10-alpha`
+(pas de `^`) : c'est une version alpha dont on contourne encore un défaut
+(le `setInterval` de limitation de débit, voir `newClientWithoutKeepAlive`).
+Une montée de version se fait à la main, en comparant le code publié : la
+`0.0.10-alpha` est parue sur npm sans le code source correspondant sur GitHub.
 
 ## Hébergement sur le VPS, via Tailscale (V2)
 
