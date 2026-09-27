@@ -33,7 +33,12 @@ export interface StartHttpServerResult {
   close(): Promise<void>;
 }
 
-async function handleMcp(context: ToolContext, req: Request, res: Response): Promise<void> {
+async function handleMcp(
+  context: ToolContext,
+  allowedHosts: string[],
+  req: Request,
+  res: Response,
+): Promise<void> {
   // Stateless: a fresh server and transport per request. There is no
   // server-to-client push to keep alive, and per-request instances avoid
   // request-id collisions between concurrent callers.
@@ -42,7 +47,7 @@ async function handleMcp(context: ToolContext, req: Request, res: Response): Pro
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
     enableDnsRebindingProtection: true,
-    allowedHosts: context.config.http.allowedHosts,
+    allowedHosts,
   });
   res.on('close', () => {
     void transport.close();
@@ -130,8 +135,12 @@ export async function startHttpServer(context: ToolContext): Promise<StartHttpSe
     res.status(401).json({ error: 'unauthorized' });
   }
 
+  // Filled in for real once the port is bound: with port 0 the derived
+  // `host:0` entry would reject every request.
+  let allowedHosts = context.config.http.allowedHosts;
+
   app.all(MCP_PATH, express.json({ limit: '4mb' }), authenticate, (req, res, next) => {
-    handleMcp(context, req, res).catch(next);
+    handleMcp(context, allowedHosts, req, res).catch(next);
   });
 
   app.use((_req, res) => {
@@ -155,6 +164,9 @@ export async function startHttpServer(context: ToolContext): Promise<StartHttpSe
 
   const address = server.address();
   const boundPort = typeof address === 'object' && address !== null ? address.port : port;
+  if (port === 0) {
+    allowedHosts = allowedHosts.map((entry) => (entry === `${host}:0` ? `${host}:${boundPort}` : entry));
+  }
 
   return {
     server,

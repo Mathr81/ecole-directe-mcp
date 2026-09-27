@@ -44,6 +44,18 @@ describe('loadConfig', () => {
       expect(http.allowedHosts).toEqual(['100.64.0.5:9000', '100.64.0.5']);
     });
 
+    it('accepts port 0, so the OS picks a free ephemeral port', () => {
+      // Falling back to 8787 here made the transport tests talk to whatever
+      // else on the host happened to own 8787.
+      expect(loadConfig({ MCP_HTTP_PORT: '0' }).http.port).toBe(0);
+    });
+
+    it('falls back to the default port on garbage', () => {
+      expect(loadConfig({ MCP_HTTP_PORT: 'abc' }).http.port).toBe(8787);
+      expect(loadConfig({ MCP_HTTP_PORT: '-1' }).http.port).toBe(8787);
+      expect(loadConfig({ MCP_HTTP_PORT: '70000' }).http.port).toBe(8787);
+    });
+
     it('takes an explicit allowlist over the derived one', () => {
       const { http } = loadConfig({ MCP_ALLOWED_HOSTS: 'vps.tailnet.ts.net:8787, 100.64.0.5:8787' });
 

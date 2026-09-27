@@ -65,6 +65,13 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function parsePort(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const value = Number(raw.trim());
+  // 0 is legitimate: it asks the OS for a free ephemeral port.
+  return Number.isInteger(value) && value >= 0 && value <= 65535 ? value : fallback;
+}
+
 function parseList(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
@@ -81,7 +88,7 @@ export function loadConfig(
   options: LoadConfigOptions = {},
 ): Config {
   const host = env.MCP_HTTP_HOST ?? DEFAULT_HTTP_HOST;
-  const port = parsePositiveInt(env.MCP_HTTP_PORT, DEFAULT_HTTP_PORT);
+  const port = parsePort(env.MCP_HTTP_PORT, DEFAULT_HTTP_PORT);
   const configuredHosts = parseList(env.MCP_ALLOWED_HOSTS);
   const sessionPath = env.SESSION_PATH ?? defaultSessionPath();
   const publicUrl = env.MCP_PUBLIC_URL ?? '';
