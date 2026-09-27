@@ -4,7 +4,7 @@
  *
  * Run with `npm run smoke-test`.
  */
-import { createBlocksDirecteClient } from '../src/client/blocksDirecteAdapter.js';
+import { createEcoleDirecteClient } from '../src/client/edClient.js';
 import { createClient } from '../src/client/createClient.js';
 import { createSessionBox } from '../src/client/sessionBox.js';
 import { loadConfig } from '../src/config.js';
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   // an expired token. An expired token surfaces below, where withAutoRefresh
   // refreshes once and retries — which is exactly the path worth exercising.
   const sessionBox = createSessionBox(session, (updated) => writeSession(updated, config.sessionPath));
-  const client = createClient(createBlocksDirecteClient(), sessionBox, {
+  const client = createClient(createEcoleDirecteClient(), sessionBox, {
     sessionMaxAgeMs: config.sessionMaxAgeMs,
   });
   // Seeded non-null just above, and nothing in this single-shot script clears it.

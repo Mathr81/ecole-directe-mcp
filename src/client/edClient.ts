@@ -1,7 +1,10 @@
-import { Client, type Account, type Credential } from '@blockshub/blocksdirecte';
+/**
+ * The École Directe client: authentication (edAuth), data (edData),
+ * messaging, documents and downloads, all over direct HTTP, mapped to the
+ * DTOs the tools return.
+ */
 import { edGet2FAQuestion, edLogin, edRelogin, edSend2FAAnswer, type AuthResult } from './edAuth.js';
 import {
-  AuthenticationRequiredError,
   PossiblyExpiredSessionError,
   TwoFactorRequiredError,
   mapCaughtError,
@@ -11,17 +14,19 @@ import { disciplineLabels, mapClassLife, mapGrades, mapPeriods, mapHomework, map
 import { fetchDocument } from './download.js';
 import { fetchDocuments } from './documents.js';
 import { computeAverages } from './averages.js';
+import {
+  fetchClassLife,
+  fetchHomeworkForDate,
+  fetchMarks,
+  fetchSchoolLife,
+  fetchTimeline,
+  fetchTimetable,
+  fetchUpcomingHomework,
+  updateHomework,
+} from './edData.js';
+import type { RawAccount, RawHomeworkDate } from './edRaw.js';
 import { fetchMessage, fetchMessages } from './messaging.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
-
-function assertPresent<T>(value: T | null | undefined, context: string): T {
-  if (value === null || value === undefined) {
-    throw new PossiblyExpiredSessionError(
-      `École Directe (${context}) a renvoyé une réponse vide — session probablement expirée.`,
-    );
-  }
-  return value;
-}
 
 /**
  * Turns an authentication result into the session we persist. Note that
@@ -34,7 +39,7 @@ function sessionFromAuthResult(
   base: { username: string; deviceUUID: string; cnKey?: string; cvKey?: string },
   result: AuthResult,
 ): Session {
-  const account = (result.accounts as Account[])[0];
+  const account = (result.accounts as RawAccount[])[0];
   if (!account) throw new PossiblyExpiredSessionError("École Directe n'a renvoyé aucun compte.");
   return {
     username: base.username,
@@ -51,79 +56,25 @@ function sessionFromAuthResult(
   };
 }
 
-/**
- * BlocksDirecte's RESTManager starts a rate-limit `setInterval` in its
- * constructor and discards the handle, so nothing can ever clear it: any
- * short-lived process that builds a Client (the smoke test, a one-shot
- * script) would print its results and then hang forever instead of exiting.
- * Capture the timer while the constructor runs — `new Client()` is
- * synchronous, so nothing else can register a timer in between — and unref
- * it. The MCP server is held open by its stdio transport, not by this timer.
- */
-function newClientWithoutKeepAlive(credential: Credential): Client {
-  const realSetInterval = globalThis.setInterval;
-  const captured: NodeJS.Timeout[] = [];
-  globalThis.setInterval = ((...args: Parameters<typeof globalThis.setInterval>) => {
-    const timer = realSetInterval(...args);
-    captured.push(timer);
-    return timer;
-  }) as typeof globalThis.setInterval;
-  try {
-    return new Client(credential);
-  } finally {
-    globalThis.setInterval = realSetInterval;
-    for (const timer of captured) timer.unref?.();
-  }
-}
-
-/**
- * One Client per session token. Not just an optimisation: each one carries a
- * RESTManager and its interval, so a Client per call would pile them up.
- */
-let cachedClient: { token: string; client: Client } | null = null;
-
-/**
- * Builds the BlocksDirecte client straight from the stored session — no
- * network call. The account list is persisted at login precisely so that a
- * fresh process doesn't have to spend a re-login just to learn which account
- * and modules exist; a token that has actually expired surfaces on the first
- * data call and is handled by `withAutoRefresh`.
- */
-export function clientFor(session: Session): Client {
-  if (cachedClient && cachedClient.token === session.token) return cachedClient.client;
-  const accounts = session.accounts as Account[] | undefined;
-  if (!session.token || !accounts || accounts.length === 0) {
-    throw new AuthenticationRequiredError(
-      'Session incomplète ou périmée (jeton ou liste de comptes manquants). Relance `ecoledirecte-mcp login`.',
-    );
-  }
-  const credential: Credential = { token: session.token, accounts, selectedAccounts: 0 };
-  const client = newClientWithoutKeepAlive(credential);
-  cachedClient = { token: session.token, client };
-  return client;
-}
-
-async function mapMarks(client: Client, schoolYear: string | undefined) {
-  const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
+async function mapMarks(session: Session, schoolYear: string | undefined) {
+  const marks = await fetchMarks(session, schoolYear);
   const labels = disciplineLabels(marks.periodes);
   // Archived years list only a handful of disciplines in their periods,
   // leaving most marks with neither libelleMatiere nor a label for their
   // code. The current year usually knows those codes: one extra call,
   // only when something is actually missing.
   if (schoolYear && marks.notes.some((note) => !note.libelleMatiere && !labels.has(note.codeMatiere))) {
-    const current = await client.marks.getMark();
-    for (const [code, label] of disciplineLabels(current?.periodes)) {
+    const current = await fetchMarks(session);
+    for (const [code, label] of disciplineLabels(current.periodes)) {
       if (!labels.has(code)) labels.set(code, label);
     }
   }
-  const periods = mapPeriods(marks.periodes as unknown as Parameters<typeof mapPeriods>[0], {
-    overallPublished: (marks.parametrage as { moyenneGenerale?: boolean } | undefined)?.moyenneGenerale === true,
-  });
+  const periods = mapPeriods(marks.periodes, { overallPublished: marks.parametrage?.moyenneGenerale === true });
   const periodLabels = new Map(periods.map((period) => [period.code, period.label]));
   return { grades: mapGrades(marks.notes, labels, periodLabels), periods };
 }
 
-export function createBlocksDirecteClient(): EcoleDirecteClient {
+export function createEcoleDirecteClient(): EcoleDirecteClient {
   return {
     async login({ username, password, deviceUUID }: LoginCredentials): Promise<Session | TwoFactorChallenge> {
       try {
@@ -165,25 +116,23 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     },
 
     async getGrades(session, schoolYear) {
-      return wrapCall(async () => mapMarks(clientFor(session), schoolYear).then(({ grades }) => grades));
+      return wrapCall(async () => mapMarks(session, schoolYear).then(({ grades }) => grades));
     },
 
     async getAverages(session, schoolYear) {
       return wrapCall(async () => {
-        const { grades, periods } = await mapMarks(clientFor(session), schoolYear);
+        const { grades, periods } = await mapMarks(session, schoolYear);
         return computeAverages(grades, periods);
       });
     },
 
     async getHomework(session, fromDate, toDate) {
       return wrapCall(async () => {
-        const client = clientFor(session);
-        const upcoming = assertPresent(await client.homework.getUpcomingHomework(), 'getUpcomingHomework');
+        const upcoming = await fetchUpcomingHomework(session);
         const dates = Object.keys(upcoming).filter((date) => date >= fromDate && date <= toDate);
-        const perDate: Array<{ date: string; response: Awaited<ReturnType<typeof client.homework.getHomeworksForDate>> }> = [];
+        const perDate: Array<{ date: string; response: RawHomeworkDate }> = [];
         for (const date of dates) {
-          const response = assertPresent(await client.homework.getHomeworksForDate(date), 'getHomeworksForDate');
-          perDate.push({ date, response });
+          perDate.push({ date, response: await fetchHomeworkForDate(session, date) });
         }
         return mapHomework(perDate);
       });
@@ -191,54 +140,30 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
 
     async markHomeworkDone(session, homeworkId, done) {
       return wrapCall(async () => {
-        const client = clientFor(session);
         const id = Number(homeworkId);
-        if (done) {
-          await client.homework.markHomeworkAsDone(id);
-        } else {
-          await client.homework.markHomeworkAsUndone(id);
-        }
+        await updateHomework(session, done ? [id] : [], done ? [] : [id]);
       });
     },
 
     async getTimetable(session, fromDate, toDate) {
-      return wrapCall(async () => {
-        const client = clientFor(session);
-        const courses = assertPresent(
-          await client.timetable.getTimetableBetweenDates(new Date(fromDate), new Date(toDate)),
-          'getTimetableBetweenDates',
-        );
-        return mapTimetable(courses);
-      });
+      return wrapCall(async () => mapTimetable(await fetchTimetable(session, fromDate, toDate)));
     },
 
     async getSchoolLife(session) {
-      return wrapCall(async () => {
-        const client = clientFor(session);
-        return mapSchoolLife(assertPresent(await client.schoollife.getSchoolLife(), 'getSchoolLife'));
-      });
+      return wrapCall(async () => mapSchoolLife(await fetchSchoolLife(session)));
     },
 
     async getClassLife(session) {
       return wrapCall(async () => {
-        const client = clientFor(session);
-        const account = (session.accounts as Account[])[0];
-        return mapClassLife(
-          assertPresent(await client.classlife.getClassLife(), 'getClassLife'),
-          account?.profile?.classe?.libelle ?? '',
-        );
+        const account = (session.accounts as RawAccount[])[0];
+        return mapClassLife(await fetchClassLife(session), account?.profile?.classe?.libelle ?? '');
       });
     },
 
     async getTimeline(session) {
-      return wrapCall(async () => {
-        const client = clientFor(session);
-        return mapTimeline(assertPresent(await client.timeline.getPersonalTimeline(), 'getPersonalTimeline'));
-      });
+      return wrapCall(async () => mapTimeline(await fetchTimeline(session)));
     },
 
-    // Messaging is absent from @blockshub/blocksdirecte, so it goes straight
-    // out over HTTP (src/client/messaging.ts) rather than through a client.
     async getMessages(session, folder, limit) {
       return wrapCall(() => fetchMessages(session, folder, limit));
     },
@@ -247,8 +172,6 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
       return wrapCall(() => fetchMessage(session, messageId));
     },
 
-    // Direct HTTP, not client.downloader: the library's getStream() drops the
-    // response headers that carry the real filename.
     async getDocuments(session, schoolYear) {
       return wrapCall(() => fetchDocuments(session, schoolYear));
     },

@@ -108,16 +108,29 @@ implémentée directement dans `src/client/edAuth.ts` plutôt que déléguée à
    et produit une session vide qui ressemble à une réussite ;
 3. écrit sur **stdout**, ce qui corrompt le flux JSON-RPC du transport stdio.
 
-Les modules de données de la librairie restent utilisés. La récursion
-infinie de leur vérification de module disponible, qu'on corrigeait par
-monkey-patch en `0.0.9-alpha`, est réparée en amont depuis `0.0.10-alpha` ;
-des tests vérifient que la librairie non patchée ne la réintroduit pas.
-La messagerie, absente de la
-librairie, est en HTTP direct (`src/client/messaging.ts`), ainsi que le
-téléchargement (`src/client/download.ts`) : `downloader.getStream()` jette
-les en-têtes de réponse, donc le vrai nom de fichier — porté par
-`Content-Disposition` — était perdu et chaque document atterrissait sur le
-disque nommé d'après son identifiant numérique, sans extension.
+Le reste a suivi : **tous** les appels passent désormais en HTTP direct
+(`src/client/edData.ts` pour les notes, devoirs, EDT, vie scolaire, vie de
+classe et fil d'actualité ; `messaging.ts`, `documents.ts`, `download.ts`),
+et la librairie n'est plus une dépendance. Elle posait trois problèmes :
+
+1. elle jetait le code numérique d'École Directe sur les appels de données,
+   si bien qu'un jeton expiré ne se devinait qu'à une réponse vide ;
+   désormais `520`/`525` deviennent une vraie `TokenExpiredError`, et le
+   rafraîchissement automatique s'applique aussi aux écritures ;
+2. elle décodait en base64 **toute** chaîne qui en avait l'air, ce qui
+   transforme un code de 4 lettres comme `ESP2` en charabia ; seuls les
+   champs réellement encodés (contenus des devoirs, des séances, de la vie
+   de classe, des messages) sont décodés ;
+3. elle démarrait un `setInterval` impossible à arrêter, qu'il fallait
+   neutraliser pour qu'un script ponctuel se termine.
+
+`downloader.getStream()`, lui, jetait les en-têtes de réponse : le vrai nom
+de fichier — porté par `Content-Disposition` — était perdu et chaque
+document atterrissait sur le disque nommé d'après son identifiant numérique.
+
+Le User-Agent `BlocksDirecte/1.0 …` est conservé tel quel : École Directe lie
+le jeton au User-Agent qui l'a obtenu, en changer invaliderait les sessions
+existantes.
 
 À noter : un téléchargement en échec répond quand même **HTTP 200**. École
 Directe met son propre code dans l'en-tête `X-Code` (403 pour un
@@ -129,23 +142,13 @@ que le code vérifie avant d'écrire quoi que ce soit sur le disque.
 **Expiration de session en cours d'utilisation.** La session est rafraîchie
 préventivement au-delà de `SESSION_MAX_AGE_MS`, et un appel de données qui
 échoue de façon récupérable déclenche un rafraîchissement puis une seule
-nouvelle tentative — jamais de boucle. Mais `@blockshub/blocksdirecte` ne
-remonte pas le code d'erreur d'École Directe sur les appels de données :
-seule une réponse vide là où la librairie garantit un objet permet de
-déduire l'expiration (`assertPresent`). Pour une écriture comme
-`mark_homework_done`, dont la réponse ne contient rien à inspecter, un outil
-peut donc renvoyer une erreur d'authentification au lieu de se rattraper
-tout seul — relancer `login` dans ce cas.
+nouvelle tentative — jamais de boucle. Si le re-login lui-même est refusé
+(identifiant d'appareil révoqué, QCM redemandé), il faut relancer `login` ;
+le health check le signale (voir plus bas).
 
 **Durée de vie réelle du jeton inconnue.** Les 15 minutes par défaut de
 `SESSION_MAX_AGE_MS` sont une valeur prudente, pas une valeur observée. À
 calibrer à l'usage (voir « Développement » ci-dessous).
-
-**`@blockshub/blocksdirecte` est épinglé** à la version exacte `0.0.10-alpha`
-(pas de `^`) : c'est une version alpha dont on contourne encore un défaut
-(le `setInterval` de limitation de débit, voir `newClientWithoutKeepAlive`).
-Une montée de version se fait à la main, en comparant le code publié : la
-`0.0.10-alpha` est parue sur npm sans le code source correspondant sur GitHub.
 
 ## Hébergement sur le VPS, via Tailscale (V2)
 

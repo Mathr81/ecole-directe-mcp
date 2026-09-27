@@ -1,6 +1,7 @@
 /**
- * JSON calls to École Directe over direct HTTP, for the endpoints
- * `@blockshub/blocksdirecte` has no module for (messaging, documents).
+ * JSON calls to École Directe over direct HTTP — every data endpoint goes
+ * through here, so École Directe's numeric codes are always seen: an expired
+ * token (520/525) becomes a TokenExpiredError that withAutoRefresh can act on.
  */
 import { EcoleDirecteApiError, mapErrorCode } from './errors.js';
 import type { Session } from './types.js';
@@ -19,7 +20,21 @@ interface Envelope {
   data?: unknown;
 }
 
-export async function post(session: Session, path: string, payload: Record<string, unknown>): Promise<unknown> {
+export interface PostOptions {
+  /**
+   * Codes that mean "nothing to show" rather than failure. École Directe
+   * answers 210 ("Aucune donnée à afficher") for an empty school life or
+   * timeline — sometimes with the full, empty payload, sometimes with none.
+   */
+  emptyCodes?: number[];
+}
+
+export async function post(
+  session: Session,
+  path: string,
+  payload: Record<string, unknown>,
+  options: PostOptions = {},
+): Promise<unknown> {
   const url = new URL(`${BASE_URL}${path}`);
   url.searchParams.set('v', API_VERSION);
   const response = await fetch(url, {
@@ -39,10 +54,8 @@ export async function post(session: Session, path: string, payload: Record<strin
     );
   }
   const body = (await response.json()) as Envelope;
+  if (options.emptyCodes?.includes(body.code)) return body.data ?? null;
   if (body.code !== 200) {
-    // Unlike the data modules of @blockshub/blocksdirecte, this code path does
-    // see École Directe's numeric code — so 520/525 become a real
-    // TokenExpiredError and withAutoRefresh can retry properly.
     throw mapErrorCode(body.code, body.message || `École Directe a renvoyé le code ${body.code}.`);
   }
   return body.data;

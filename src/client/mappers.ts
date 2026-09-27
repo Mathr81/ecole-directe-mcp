@@ -1,4 +1,13 @@
-import type { Client, TimetableCourse } from '@blockshub/blocksdirecte';
+import type {
+  RawCdtFile,
+  RawClassLife,
+  RawHomeworkDate,
+  RawMark,
+  RawPeriod,
+  RawSchoolLife,
+  RawTimelineItem,
+  RawTimetableCourse,
+} from './edRaw.js';
 import type {
   Attachment,
   ClassLifeSummary,
@@ -13,13 +22,6 @@ import type {
   TimelineEntry,
   TimetableSlot,
 } from './types.js';
-
-type BDClient = InstanceType<typeof Client>;
-type RawMark = Awaited<ReturnType<BDClient['marks']['getMark']>>['notes'][number];
-type RawHomeworkDate = Awaited<ReturnType<BDClient['homework']['getHomeworksForDate']>>;
-type RawSchoolLife = Awaited<ReturnType<BDClient['schoollife']['getSchoolLife']>>;
-type RawClassLife = Awaited<ReturnType<BDClient['classlife']['getClassLife']>>;
-type RawPersonalTimelineItem = Awaited<ReturnType<BDClient['timeline']['getPersonalTimeline']>>[number];
 
 function parseFrenchNumber(raw: string | undefined | null): number | null {
   if (!raw) return null;
@@ -60,16 +62,13 @@ export function stripHtml(html: string): string {
   );
 }
 
-interface RawPeriodDisciplines {
-  ensembleMatieres?: { disciplines?: Array<{ codeMatiere?: string; discipline?: string }> };
-}
 
 /**
  * Subject code → label, gathered from every period of a grades response. On
  * archived school years most marks come back with an empty `libelleMatiere`,
  * but `codeMatiere` is always set and the periods still list each label.
  */
-export function disciplineLabels(periods: RawPeriodDisciplines[] | undefined): Map<string, string> {
+export function disciplineLabels(periods: Array<Pick<RawPeriod, 'ensembleMatieres'>> | undefined): Map<string, string> {
   const labels = new Map<string, string>();
   for (const period of periods ?? []) {
     for (const entry of period.ensembleMatieres?.disciplines ?? []) {
@@ -109,26 +108,6 @@ export function mapGrades(
   });
 }
 
-interface RawPeriod {
-  codePeriode: string;
-  periode: string;
-  dateDebut?: string;
-  dateFin?: string;
-  cloture?: boolean;
-  annuel?: boolean;
-  ensembleMatieres?: {
-    moyenneGenerale?: string;
-    disciplines?: Array<{
-      codeMatiere?: string;
-      discipline?: string;
-      moyenne?: string;
-      coef?: number;
-      groupeMatiere?: boolean;
-      sousMatiere?: boolean;
-    }>;
-  };
-}
-
 export function mapPeriods(
   periods: RawPeriod[] | undefined,
   { overallPublished = false }: { overallPublished?: boolean } = {},
@@ -162,8 +141,6 @@ export function mapPeriods(
     };
   });
 }
-
-type RawCdtFile = { id: number; libelle: string; taille?: number; type: string };
 
 function mapAttachments(files: RawCdtFile[] | undefined): Attachment[] {
   return (files ?? []).map((file) => ({
@@ -210,7 +187,7 @@ export function mapHomework(perDate: Array<{ date: string; response: RawHomework
   return { homework, lessons };
 }
 
-export function mapTimetable(courses: TimetableCourse[]): TimetableSlot[] {
+export function mapTimetable(courses: RawTimetableCourse[]): TimetableSlot[] {
   return courses
     .map((course) => ({
       id: String(course.id),
@@ -220,7 +197,7 @@ export function mapTimetable(courses: TimetableCourse[]): TimetableSlot[] {
       group: course.groupeCode || null,
       start: course.start_date,
       end: course.end_date,
-      cancelled: course.isAnnule,
+      cancelled: course.isAnnule === true,
       modified: course.isModifie === true,
     }))
     // "AAAA-MM-JJ HH:MM" sorts lexically in chronological order; École Directe
@@ -246,14 +223,14 @@ export function mapSchoolLife(schoolLife: RawSchoolLife): SchoolLifeEntry[] {
     type: item.typeElement,
     date: item.date,
     description: item.libelle,
-    justified: item.justifie,
+    justified: item.justifie ?? null,
   }));
   const exemptions: SchoolLifeEntry[] = asArray(schoolLife.dispenses).map((item) => ({
     id: String(item.id),
     type: 'Dispense',
     date: item.date,
     description: item.libelle,
-    justified: item.justifie,
+    justified: item.justifie ?? null,
   }));
   const conduct: SchoolLifeEntry[] = asArray(schoolLife.sanctionsEncouragements).map((item) => ({
     id: String(item.id),
@@ -279,7 +256,7 @@ export function mapClassLife(classLife: RawClassLife, accountClassName = ''): Cl
   };
 }
 
-export function mapTimeline(items: RawPersonalTimelineItem[]): TimelineEntry[] {
+export function mapTimeline(items: RawTimelineItem[]): TimelineEntry[] {
   return items.map((item) => ({
     id: item.idElement ? String(item.idElement) : null,
     date: item.date,

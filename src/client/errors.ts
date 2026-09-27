@@ -30,19 +30,15 @@ export class TwoFactorRequiredError extends EcoleDirecteApiError {
 }
 
 /**
- * Thrown by the adapter (Task 6) when a BlocksDirecte data method returns
- * null/undefined where it structurally guarantees an object or array — the
- * one observable symptom of an expired token for those methods, since
- * @blockshub/blocksdirecte discards École Directe's numeric error code
- * before it reaches the adapter for anything other than login/refresh/2FA.
- * Treated identically to TokenExpiredError by withAutoRefresh. Do not
- * remove this as "unreachable defensive code" — it is the only signal
- * available for 8 of the 9 data methods. See the plan's Global Constraints
- * for the full rationale.
+ * Thrown when École Directe answers code 200 with no data where an object or
+ * array is required. Every call now sees École Directe's numeric code, so an
+ * expired token normally arrives as TokenExpiredError; this remains the
+ * fallback for an answer that is empty without saying why, and is treated
+ * the same way by withAutoRefresh.
  */
 export class PossiblyExpiredSessionError extends EcoleDirecteApiError {
   constructor(
-    message = "École Directe a renvoyé une réponse vide là où un objet ou un tableau était attendu — signe probable d'une session expirée (la librairie ne remonte pas le code d'erreur École Directe pour cet appel).",
+    message = "École Directe a renvoyé une réponse vide là où un objet ou un tableau était attendu — signe probable d'une session expirée.",
   ) {
     super(0, message);
     this.name = 'PossiblyExpiredSessionError';
@@ -78,14 +74,9 @@ export function mapErrorCode(code: number, message: string): EcoleDirecteApiErro
 }
 
 /**
- * Duck-types a thrown value for a numeric error code — this file has no
- * import from @blockshub/blocksdirecte and does not know the real shape
- * of what a failed data call throws (unlike ServerResponse<T>, which is
- * a *success*-path type seen in the library's .d.ts and isn't otherwise
- * relevant here). This is a guess at a plausible shape, unverified
- * against a real expired token — see Task 16. A value that doesn't match
- * (no numeric `.code` or `.response.code`) returns `undefined`, so
- * `wrapCall` rethrows it completely unchanged rather than fabricating an
+ * Duck-types a thrown value for a numeric error code (`.code` or
+ * `.response.code`). A value that doesn't match returns `undefined`, so
+ * `wrapCall` rethrows it unchanged rather than fabricating an
  * `EcoleDirecteApiError`.
  */
 export function extractErrorCode(error: unknown): number | undefined {

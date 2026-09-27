@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { stdin, stdout } from 'node:process';
 import { createInterface } from 'node:readline/promises';
-import { createBlocksDirecteClient } from '../client/blocksDirecteAdapter.js';
+import { createEcoleDirecteClient } from '../client/edClient.js';
 import { createClient } from '../client/createClient.js';
 import { createSessionBox } from '../client/sessionBox.js';
 import { loadConfig } from '../config.js';
@@ -59,7 +59,7 @@ async function runLoginCommand(): Promise<void> {
   const username = await promptVisible('Identifiant École Directe : ');
   const password = await promptHidden('Mot de passe : ');
   const deviceUUID = await loadOrCreateDeviceUUID();
-  const client = createBlocksDirecteClient();
+  const client = createEcoleDirecteClient();
   const session = await runLoginFlow(client, readlineIO, { username, password, deviceUUID });
   await writeSession(session);
   console.log(`\nConnecté en tant que ${session.displayName}. Session enregistrée dans ${resolveSessionPath()}.`);
@@ -70,7 +70,7 @@ async function runServeCommand(useHttp: boolean): Promise<void> {
   // other machines on the tailnet, unlike stdio where the only caller is the
   // user at their own keyboard. An explicit READ_ONLY=false still wins.
   const config = loadConfig(process.env, { readOnlyDefault: useHttp });
-  const base = createBlocksDirecteClient();
+  const base = createEcoleDirecteClient();
   // No refresh here: the stored session already carries everything the client
   // needs, and a re-login on every startup burns the one credential that can
   // recover an expired token. A token that really has expired surfaces on the

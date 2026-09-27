@@ -16,8 +16,8 @@
  *  3. It writes to **stdout** (`console.log(response.message)`), which
  *     corrupts the JSON-RPC stream of the stdio MCP transport.
  *
- * The data modules of the library are still used (see `blocksDirecteAdapter`);
- * only auth is ours.
+ * The library has since been dropped entirely: data calls are direct HTTP
+ * too (see edData).
  */
 import {
   EcoleDirecteApiError,

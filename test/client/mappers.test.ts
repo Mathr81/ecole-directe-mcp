@@ -11,7 +11,7 @@ import {
   makeRawPersonalTimelineItem,
   makeRawSchoolLife,
   makeRawTimetableCourse,
-} from '../fixtures/blocksDirecteFixtures.js';
+} from '../fixtures/edFixtures.js';
 
 describe('mapGrades', () => {
   it('parses French decimal notation and flags non-numeric grades as null', () => {
@@ -238,9 +238,9 @@ describe('mapHomework', () => {
   it('flags a test, and lists attachments with the fileType download_document needs', () => {
     const subject = makeRawHomeworkSubject({ interrogation: true });
     subject.aFaire!.documents = [
-      { id: 593, libelle: 'Cours 21 09.pdf', taille: 49312, type: 'FICHIER_CDT', signatureDemandee: false, etatSignatures: [], signature: {} },
+      { id: 593, libelle: 'Cours 21 09.pdf', taille: 49312, type: 'FICHIER_CDT' },
     ];
-    subject.aFaire!.contenuDeSeance = { contenu: '<p>Loi binomiale</p>', documents: [], commentaires: [] };
+    subject.aFaire!.contenuDeSeance = { contenu: '<p>Loi binomiale</p>', documents: [] };
 
     const { homework } = mapHomework([{ date: '2026-09-22', response: { date: '2026-09-22', matieres: [subject] } }]);
 
@@ -259,14 +259,10 @@ describe('mapHomework', () => {
       matiere: 'MATHS EXPERTES',
       nomProf: 'Mme A.',
       contenuDeSeance: {
-        idDevoir: 7,
         contenu: '<p>Congruences</p>',
         documents: [
-          { id: 594, libelle: 'Cours.pdf', taille: 10, type: 'FICHIER_CDT', signatureDemandee: false, etatSignatures: [], signature: {} },
+          { id: 594, libelle: 'Cours.pdf', taille: 10, type: 'FICHIER_CDT' },
         ],
-        commentaires: [],
-        elementsProg: [],
-        liensManuel: [],
       },
     });
     const empty = makeRawHomeworkSubject({ aFaire: undefined });
@@ -310,8 +306,8 @@ describe('mapTimetable', () => {
 
   it('exposes the group, so parallel slots of one group read as alternatives', () => {
     const [slot, whole] = mapTimetable([
-      makeRawTimetableCourse({ id: 1, groupeCode: 'TG3ACCPE', classeCode: '' }),
-      makeRawTimetableCourse({ id: 2, start_date: '2099-01-01 08:00', groupeCode: '', classeCode: 'TG3' }),
+      makeRawTimetableCourse({ id: 1, groupeCode: 'TG3ACCPE' }),
+      makeRawTimetableCourse({ id: 2, start_date: '2099-01-01 08:00', groupeCode: '' }),
     ]);
 
     expect(slot.group).toBe('TG3ACCPE');
