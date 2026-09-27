@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -178,19 +181,66 @@ describe('mark_homework_done tool', () => {
 });
 
 describe('download_document tool', () => {
-  it('returns a file path, not inline content', async () => {
-    const fake = new FakeEcoleDirecteClient();
-    fake.downloadResult = { path: '/downloads/123', filename: '123', mimeType: 'application/octet-stream', sizeBytes: 42 };
+  async function download(fake: FakeEcoleDirecteClient, extra: Partial<ToolContext> = {}) {
     const session = makeSession();
     const mcpClient = await connect({
       client: fake,
       sessionBox: { get: () => session, set: async () => {} },
       config: loadConfig({}),
+      ...extra,
+    });
+    const result = await mcpClient.callTool({ name: 'download_document', arguments: { fileId: '123', fileType: 'PJ' } });
+    return JSON.parse(textOf(result as { content: unknown })) as Record<string, unknown>;
+  }
+
+  it('returns the local path and the extracted text, with no link, over stdio', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ed-tool-'));
+    try {
+      const path = join(dir, 'circulaire.txt');
+      await writeFile(path, 'Sortie au musée jeudi.');
+      const fake = new FakeEcoleDirecteClient();
+      fake.downloadResult = { path, filename: 'circulaire.txt', mimeType: 'text/plain', sizeBytes: 23 };
+
+      const payload = await download(fake);
+
+      expect(payload).toMatchObject({ path, filename: 'circulaire.txt', text: 'Sortie au musée jeudi.', textTruncated: false });
+      expect(payload.downloadUrl).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('says why there is no text for a format it cannot read', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.downloadResult = { path: '/downloads/123', filename: 'photo.png', mimeType: 'image/png', sizeBytes: 42 };
+
+    const payload = await download(fake);
+
+    expect(payload.text).toBeNull();
+    expect(payload.textUnavailableReason).toContain('image/png');
+  });
+
+  it('swaps the server path for a download link when the transport issues links', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.downloadResult = { path: '/data/downloads/b.pdf', filename: 'b.pdf', mimeType: 'image/png', sizeBytes: 42 };
+    const issued: unknown[] = [];
+
+    const payload = await download(fake, {
+      downloadLinks: {
+        issue: (file) => {
+          issued.push(file);
+          return { url: 'https://ed.example.fr/downloads/tok', expiresAt: '2026-09-27T15:00:00.000Z' };
+        },
+      },
     });
 
-    const result = await mcpClient.callTool({ name: 'download_document', arguments: { fileId: '123', fileType: 'PJ' } });
-
-    expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.downloadResult);
+    expect(issued).toEqual([{ path: '/data/downloads/b.pdf', filename: 'b.pdf', mimeType: 'image/png' }]);
+    expect(payload).toMatchObject({
+      filename: 'b.pdf',
+      downloadUrl: 'https://ed.example.fr/downloads/tok',
+      downloadUrlExpiresAt: '2026-09-27T15:00:00.000Z',
+    });
+    expect(payload.path).toBeUndefined();
   });
 
   it('remains registered even when READ_ONLY is true (it only writes local files)', async () => {

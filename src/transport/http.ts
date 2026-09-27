@@ -22,6 +22,7 @@ import { buildServer, type ToolContext } from '../mcp/server.js';
 import { CONSENT_PATH, EcoleDirecteOAuthProvider, SUPPORTED_SCOPES } from '../oauth/provider.js';
 import { OAuthStore } from '../oauth/store.js';
 import { isAuthorized } from './httpAuth.js';
+import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
 
 export const MCP_PATH = '/mcp';
 export const HEALTH_PATH = '/health';
@@ -84,6 +85,26 @@ export async function startHttpServer(context: ToolContext): Promise<StartHttpSe
     res.json({ status: 'ok', sessionExists: context.sessionBox.get() !== null });
   });
 
+  // Created once the port is bound, since the tailnet base URL depends on it.
+  let downloadLinks: DownloadLinks | undefined;
+
+  // Unauthenticated by design: a browser cannot send the MCP bearer token, so
+  // the unguessable, expiring token in the URL is the credential. The path
+  // served is the one the server itself recorded — never taken from the request.
+  app.get(`${DOWNLOAD_PATH_PREFIX}:token`, (req, res, next) => {
+    const file = downloadLinks?.resolve(req.params.token);
+    if (!file) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`);
+    res.sendFile(file.path, { dotfiles: 'allow' }, (error) => {
+      if (error && !res.headersSent) next(error);
+    });
+  });
+
   let oauthGuard: ReturnType<typeof requireBearerAuth> | undefined;
 
   if (oauth.enabled) {
@@ -140,7 +161,7 @@ export async function startHttpServer(context: ToolContext): Promise<StartHttpSe
   let allowedHosts = context.config.http.allowedHosts;
 
   app.all(MCP_PATH, express.json({ limit: '4mb' }), authenticate, (req, res, next) => {
-    handleMcp(context, allowedHosts, req, res).catch(next);
+    handleMcp({ ...context, downloadLinks }, allowedHosts, req, res).catch(next);
   });
 
   app.use((_req, res) => {
@@ -167,6 +188,9 @@ export async function startHttpServer(context: ToolContext): Promise<StartHttpSe
   if (port === 0) {
     allowedHosts = allowedHosts.map((entry) => (entry === `${host}:0` ? `${host}:${boundPort}` : entry));
   }
+  // The public origin when there is one — reachable from anywhere, tailnet
+  // included — otherwise the first address clients are allowed to use.
+  downloadLinks = new DownloadLinks(oauth.publicUrl ? new URL(oauth.publicUrl).origin : `http://${allowedHosts[0]}`);
 
   return {
     server,

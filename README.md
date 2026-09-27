@@ -38,12 +38,23 @@ explicite au lieu de faire tomber le serveur.
 | `get_timeline` | Fil d'actualité personnel |
 | `get_messages` | Liste les messages d'un dossier (en-têtes seulement) |
 | `read_message` | Contenu d'un message, HTML retiré, avec ses pièces jointes |
-| `download_document` | Télécharge un document dans `DOWNLOAD_DIR`, sous son vrai nom, et renvoie son chemin |
+| `download_document` | Télécharge un document dans `DOWNLOAD_DIR`, sous son vrai nom, et renvoie son texte (PDF, DOCX, TXT, HTML) ; plus son chemin en local, ou un lien temporaire en HTTP |
 
 La messagerie est en deux outils parce que l'API l'impose : la liste
 renvoie `content: ""` pour chaque message, les corps n'existent que sur
 l'endpoint par message. Les pièces jointes se récupèrent avec
 `download_document` en passant `fileType` = `PIECE_JOINTE`.
+
+En HTTP, le fichier atterrit sur le serveur, hors de portée du client : le
+chemin ne lui servirait à rien. `download_document` renvoie donc le **texte**
+du document, ce dont le modèle a besoin (tronqué à 100 000 caractères), et un
+**lien temporaire** `…/downloads/<jeton>` valable une heure pour que tu
+récupères le fichier toi-même. Un navigateur ne sait pas envoyer le jeton MCP :
+c'est le jeton aléatoire de 256 bits dans l'URL qui fait office d'accès, et il
+ne désigne qu'un fichier que le serveur a lui-même écrit. Les liens vivent en
+mémoire et disparaissent au redémarrage. L'URL de base est l'origine de
+`MCP_PUBLIC_URL` si elle est définie, sinon la première entrée de
+`MCP_ALLOWED_HOSTS`.
 
 ## Variables d'environnement
 
@@ -191,19 +202,21 @@ l'infrastructure d'Anthropic peut parler à `/mcp`, `/token`, `/register` et
 aux métadonnées : un scanner se fait refouler avant même d'atteindre
 l'authentification.
 
-Deux pages font exception : `/authorize` et `/oauth/consent` sont ouvertes
-par **ton navigateur**, pas par Anthropic. Un `deny all` global les
-bloquerait et l'autorisation échouerait sur un 403. Elles restent donc
-ouvertes, protégées par la phrase secrète (cinq essais par demande) et la
-limitation de débit du routeur OAuth. Onglet **Advanced** du Proxy Host :
+Trois chemins font exception : `/authorize` et `/oauth/consent`, ainsi que
+les liens de téléchargement `/downloads/<jeton>`, sont ouverts par **ton
+navigateur**, pas par Anthropic. Un `deny all` global les
+bloquerait : l'autorisation échouerait sur un 403, et aucun lien ne
+s'ouvrirait. Ils restent donc ouverts, protégés par la phrase secrète (cinq
+essais par demande) et la limitation de débit du routeur OAuth pour les
+premiers, par un jeton aléatoire qui expire au bout d'une heure pour les liens. Onglet **Advanced** du Proxy Host :
 
 ```nginx
 # Streamable HTTP peut ouvrir un flux SSE sur GET /mcp :
 proxy_buffering off;
 proxy_read_timeout 3600s;
 
-# Pages ouvertes par ton navigateur pendant l'autorisation.
-location ~ ^/(authorize|oauth/consent)$ {
+# Ouverts par ton navigateur : autorisation OAuth et liens de téléchargement.
+location ~ ^/(authorize|oauth/consent|downloads/[A-Za-z0-9_-]+)$ {
   include conf.d/include/proxy.conf;
 }
 

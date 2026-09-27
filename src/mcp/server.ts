@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config.js';
 import type { EcoleDirecteClient } from '../client/types.js';
 import type { SessionBox } from '../client/sessionBox.js';
+import type { DownloadLinks } from '../transport/downloadLinks.js';
 import { registerGetGrades } from './tools/getGrades.js';
 import { registerGetHomework } from './tools/getHomework.js';
 import { registerGetTimetable } from './tools/getTimetable.js';
@@ -18,6 +19,12 @@ export interface ToolContext {
   client: EcoleDirecteClient;
   sessionBox: SessionBox;
   config: Config;
+  /**
+   * Set by the HTTP transport only: there the file lands on the server, so
+   * `download_document` hands back a temporary link instead of a path the
+   * caller cannot open. Under stdio the path is local and is returned as is.
+   */
+  downloadLinks?: Pick<DownloadLinks, 'issue'>;
 }
 
 export function buildServer(context: ToolContext): McpServer {

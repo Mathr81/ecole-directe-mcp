@@ -1,4 +1,7 @@
 import { request as httpRequest } from 'node:http';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config.js';
 import { createSessionBox } from '../../src/client/sessionBox.js';
@@ -166,6 +169,48 @@ describe('HTTP transport', () => {
     });
 
     expect(response.status).toBe(403);
+  });
+
+  it('hands out a temporary link that serves a downloaded file without the MCP token', async () => {
+    // A browser cannot attach the bearer token, so the link is its own
+    // credential; the file lives in the container, out of the user's reach.
+    const dir = await mkdtemp(join(tmpdir(), 'ed-dl-'));
+    try {
+      const path = join(dir, 'Règlement EPS.txt');
+      await writeFile(path, 'Tenue de sport obligatoire.');
+      const { fake, port } = await start();
+      fake.downloadResult = { path, filename: 'Règlement EPS.txt', mimeType: 'text/plain', sizeBytes: 27 };
+
+      const call = await request(port, '/mcp', {
+        method: 'POST',
+        headers: { ...MCP_HEADERS, Authorization: `Bearer ${TOKEN}` },
+        body: rpc('tools/call', { name: 'download_document', arguments: { fileId: '1', fileType: '' } }),
+      });
+      const payload = JSON.parse(
+        call.json<{ result: { content: Array<{ text: string }> } }>().result.content[0].text,
+      ) as { text: string; downloadUrl: string; downloadUrlExpiresAt: string; path?: string };
+
+      expect(payload.text).toBe('Tenue de sport obligatoire.');
+      // The server-side path means nothing to a remote client.
+      expect(payload.path).toBeUndefined();
+      const link = new URL(payload.downloadUrl);
+
+      const download = await request(port, link.pathname);
+
+      expect(download.status).toBe(200);
+      expect(download.body).toBe('Tenue de sport obligatoire.');
+      expect(download.headers['content-disposition']).toContain("filename*=UTF-8''R%C3%A8glement%20EPS.txt");
+      expect(download.headers['cache-control']).toBe('no-store');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('404s an unknown or malformed download token', async () => {
+    const { port } = await start();
+
+    expect((await request(port, '/downloads/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')).status).toBe(404);
+    expect((await request(port, '/downloads/..%2F..%2Fetc%2Fpasswd')).status).toBe(404);
   });
 
   it('404s any other path', async () => {
