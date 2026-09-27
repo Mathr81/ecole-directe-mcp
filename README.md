@@ -187,16 +187,33 @@ injoignable pour Anthropic. Une exposition publique est la seule voie.
 
 Anthropic publie sa plage de sortie, `160.79.104.0/21`. En l'allowlistant dans
 Nginx Proxy Manager, le domaine est public dans le DNS mais seule
-l'infrastructure d'Anthropic peut lui parler : un scanner se fait refouler
-avant même d'atteindre l'authentification. Onglet **Advanced** du Proxy Host :
+l'infrastructure d'Anthropic peut parler à `/mcp`, `/token`, `/register` et
+aux métadonnées : un scanner se fait refouler avant même d'atteindre
+l'authentification.
+
+Deux pages font exception : `/authorize` et `/oauth/consent` sont ouvertes
+par **ton navigateur**, pas par Anthropic. Un `deny all` global les
+bloquerait et l'autorisation échouerait sur un 403. Elles restent donc
+ouvertes, protégées par la phrase secrète (cinq essais par demande) et la
+limitation de débit du routeur OAuth. Onglet **Advanced** du Proxy Host :
 
 ```nginx
-allow 160.79.104.0/21;
-deny all;
-
 # Streamable HTTP peut ouvrir un flux SSE sur GET /mcp :
 proxy_buffering off;
 proxy_read_timeout 3600s;
+
+# Pages ouvertes par ton navigateur pendant l'autorisation.
+location ~ ^/(authorize|oauth/consent)$ {
+  include conf.d/include/proxy.conf;
+}
+
+# Tout le reste : Anthropic uniquement. Définir `location /` ici fait que
+# NPM n'émet pas le sien.
+location / {
+  allow 160.79.104.0/21;
+  deny all;
+  include conf.d/include/proxy.conf;
+}
 ```
 
 Plus un certificat Let's Encrypt avec *Force SSL*. Garde `READ_ONLY=true`.
