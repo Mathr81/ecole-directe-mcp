@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { SERVER_ICONS } from './icon.js';
 import type { Config } from '../config.js';
 import type { EcoleDirecteClient } from '../client/types.js';
 import type { SessionBox } from '../client/sessionBox.js';
@@ -30,7 +31,12 @@ export interface ToolContext {
 }
 
 export function buildServer(context: ToolContext): McpServer {
-  const server = new McpServer({ name: 'ecoledirecte-mcp', version: '0.1.0' });
+  const server = new McpServer({
+    name: 'ecoledirecte-mcp',
+    title: 'École Directe',
+    version: '0.1.0',
+    icons: SERVER_ICONS,
+  });
   registerGetGrades(server, context);
   registerGetAverages(server, context);
   registerGetHomework(server, context);

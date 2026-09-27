@@ -20,6 +20,28 @@ function textOf(result: { content: unknown }): string {
   return (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
 }
 
+describe('server identity', () => {
+  it('advertises a title and an icon in serverInfo, as data URIs need no fetch', async () => {
+    // Claude.ai does not read serverInfo.icons for custom connectors yet
+    // (anthropics/claude-ai-mcp#152) and shows the favicon of the domain's
+    // last two labels instead; the icon is there for when it does.
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: new FakeEcoleDirecteClient(),
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({}),
+    });
+
+    const info = mcpClient.getServerVersion();
+
+    expect(info?.title).toBe('École Directe');
+    expect(info?.icons?.[0]).toMatchObject({ mimeType: 'image/svg+xml', sizes: ['any'] });
+    expect(info?.icons?.[0].src.startsWith('data:image/svg+xml;base64,')).toBe(true);
+    const svg = Buffer.from(info!.icons![0].src.split(',')[1], 'base64').toString('utf8');
+    expect(svg).toContain('<svg');
+  });
+});
+
 describe('get_grades tool', () => {
   it('returns grades from the underlying client as JSON', async () => {
     const fake = new FakeEcoleDirecteClient();
