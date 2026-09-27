@@ -102,6 +102,19 @@ describe('fetchDocument', () => {
     expect(calls[1].searchParams.has('archive')).toBe(false);
   });
 
+  it('prefixes an archived document with its school year, so two years never share a name', async () => {
+    // Bulletins are named after their period only ("Note_A002.pdf"): the same
+    // semester of two years would otherwise overwrite each other on disk.
+    stubBinary(new Uint8Array([0x25]), { 'content-disposition': 'Attachment; filename="Note_A002.pdf"' });
+
+    const archived = await withTempDir((dir) => fetchDocument(makeSession(), '10339', 'Note', dir, '2025-2026'));
+    const current = await withTempDir((dir) => fetchDocument(makeSession(), '11000', 'Note', dir));
+
+    expect(archived.filename).toBe('2025-2026_Note_A002.pdf');
+    expect(archived.path.endsWith('2025-2026_Note_A002.pdf')).toBe(true);
+    expect(current.filename).toBe('Note_A002.pdf');
+  });
+
   it('writes the bytes it received', async () => {
     stubBinary(new Uint8Array([1, 2, 3, 4, 5]), { 'content-disposition': 'attachment; filename="x.bin"' });
 

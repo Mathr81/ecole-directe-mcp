@@ -155,10 +155,10 @@ export async function fetchDocument(
     );
   }
 
-  const filename = safeFilename(
-    parseContentDispositionFilename(response.headers.get('content-disposition')),
-    fileId,
-  );
+  const serverName = safeFilename(parseContentDispositionFilename(response.headers.get('content-disposition')), fileId);
+  // Bulletins are named after their period alone ("Note_A002.pdf"): without
+  // the year, the same semester of two years would overwrite each other.
+  const filename = schoolYear ? safeFilename(`${schoolYear}_${serverName}`, fileId) : serverName;
   await mkdir(destinationDir, { recursive: true });
   const path = join(destinationDir, filename);
   await pipeline(Readable.fromWeb(response.body), createWriteStream(path));
