@@ -23,6 +23,7 @@ import { CONSENT_PATH, EcoleDirecteOAuthProvider, SUPPORTED_SCOPES } from '../oa
 import { OAuthStore } from '../oauth/store.js';
 import { isAuthorized } from './httpAuth.js';
 import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
+import type { HealthState, SessionMonitor } from '../health/sessionMonitor.js';
 
 export const MCP_PATH = '/mcp';
 export const HEALTH_PATH = '/health';
@@ -58,7 +59,17 @@ async function handleMcp(
   await transport.handleRequest(req, res, req.body);
 }
 
-export async function startHttpServer(context: ToolContext): Promise<StartHttpServerResult> {
+export interface StartHttpServerOptions {
+  /** Last result of the periodic session check; without one, /health reports `unknown`. */
+  monitor?: Pick<SessionMonitor, 'state'>;
+}
+
+const UNKNOWN_HEALTH: HealthState = { status: 'unknown', reason: null, since: null, checkedAt: null };
+
+export async function startHttpServer(
+  context: ToolContext,
+  options: StartHttpServerOptions = {},
+): Promise<StartHttpServerResult> {
   const { host, port, authToken } = context.config.http;
   const oauth = context.config.oauth;
 
@@ -79,10 +90,18 @@ export async function startHttpServer(context: ToolContext): Promise<StartHttpSe
   app.disable('x-powered-by');
 
   // Health check: unauthenticated on purpose, so infrastructure can probe it,
-  // and therefore deliberately uninformative — whether a session exists, and
-  // nothing that identifies the account or its data.
+  // and therefore deliberately uninformative — whether the session works and
+  // a coarse reason when it does not, nothing that identifies the account or
+  // its data. A broken session answers 503, which is what the Docker
+  // healthcheck and Uptime Kuma/Gatus alert on.
   app.get(HEALTH_PATH, (_req, res) => {
-    res.json({ status: 'ok', sessionExists: context.sessionBox.get() !== null });
+    const session = options.monitor?.state() ?? UNKNOWN_HEALTH;
+    const failing = session.status === 'failing';
+    res.status(failing ? 503 : 200).json({
+      status: failing ? 'failing' : 'ok',
+      sessionExists: context.sessionBox.get() !== null,
+      session,
+    });
   });
 
   // Created once the port is bound, since the tailnet base URL depends on it.

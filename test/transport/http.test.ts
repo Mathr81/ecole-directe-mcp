@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config.js';
 import { createSessionBox } from '../../src/client/sessionBox.js';
 import { startHttpServer, type StartHttpServerResult } from '../../src/transport/http.js';
+import type { HealthState } from '../../src/health/sessionMonitor.js';
 import { FakeEcoleDirecteClient, makeSession } from '../fakes/FakeEcoleDirecteClient.js';
 
 const TOKEN = 'test-token-0123456789abcdef';
@@ -17,7 +18,7 @@ afterEach(async () => {
   running = null;
 });
 
-async function start(env: Record<string, string | undefined> = {}) {
+async function start(env: Record<string, string | undefined> = {}, health?: HealthState) {
   const fake = new FakeEcoleDirecteClient();
   fake.timetable = [
     { id: '1', subject: 'MATHS', teacher: null, room: null, group: null, start: '2026-09-09 08:00', end: '2026-09-09 09:00', cancelled: false, modified: false },
@@ -27,7 +28,7 @@ async function start(env: Record<string, string | undefined> = {}) {
     { readOnlyDefault: true },
   );
   const sessionBox = createSessionBox(makeSession(), async () => {});
-  running = await startHttpServer({ client: fake, sessionBox, config });
+  running = await startHttpServer({ client: fake, sessionBox, config }, health ? { monitor: { state: () => health } } : {});
   return { fake, port: running.port };
 }
 
@@ -97,8 +98,37 @@ describe('HTTP transport', () => {
     const response = await request(port, '/health');
 
     expect(response.status).toBe(200);
-    expect(response.json()).toEqual({ status: 'ok', sessionExists: true });
+    expect(response.json()).toEqual({
+      status: 'ok',
+      sessionExists: true,
+      session: { status: 'unknown', reason: null, since: null, checkedAt: null },
+    });
     expect(response.body).not.toContain('jdupont');
+  });
+
+  it('reports the last session check on /health', async () => {
+    const health: HealthState = { status: 'ok', reason: null, since: '2026-09-27T14:00:00.000Z', checkedAt: '2026-09-27T14:15:00.000Z' };
+    const { port } = await start({}, health);
+
+    const response = await request(port, '/health');
+
+    expect(response.status).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'ok', session: health });
+  });
+
+  it('answers 503 on /health once the session is broken, so monitoring alerts', async () => {
+    const health: HealthState = {
+      status: 'failing',
+      reason: 'auth_required',
+      since: '2026-09-27T14:00:00.000Z',
+      checkedAt: '2026-09-27T14:15:00.000Z',
+    };
+    const { port } = await start({}, health);
+
+    const response = await request(port, '/health');
+
+    expect(response.status).toBe(503);
+    expect(response.json()).toMatchObject({ status: 'failing', session: { reason: 'auth_required' } });
   });
 
   it('rejects an MCP request with no token', async () => {

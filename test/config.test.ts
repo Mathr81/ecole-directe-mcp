@@ -67,6 +67,14 @@ describe('loadConfig', () => {
     });
   });
 
+  describe('health check interval', () => {
+    it('defaults to 15 minutes, and 0 turns the check off', () => {
+      expect(loadConfig({}).healthCheckIntervalMs).toBe(15 * 60 * 1000);
+      expect(loadConfig({ HEALTH_CHECK_INTERVAL_MS: '60000' }).healthCheckIntervalMs).toBe(60_000);
+      expect(loadConfig({ HEALTH_CHECK_INTERVAL_MS: '0' }).healthCheckIntervalMs).toBe(0);
+    });
+  });
+
   describe('read-only default per transport', () => {
     it('is false for stdio and true for HTTP', () => {
       // stdio's only caller is the user at their own keyboard; HTTP is

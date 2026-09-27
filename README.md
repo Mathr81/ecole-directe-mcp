@@ -188,8 +188,23 @@ Le conteneur écoute sur `0.0.0.0` **à l'intérieur** de son espace réseau, ce
 qui est correct : l'isolation vient de la publication du port sur la seule IP
 Tailscale.
 
-`/health` répond sans jeton, et volontairement sans rien dire du compte :
-`{"status":"ok","sessionExists":true}`. C'est ce que sonde le `HEALTHCHECK`.
+`/health` répond sans jeton, et volontairement sans rien dire du compte. Il
+ne se contente pas de dire que le processus tourne : toutes les 15 minutes
+(`HEALTH_CHECK_INTERVAL_MS`), le serveur fait un vrai appel léger, avec
+rafraîchissement du jeton comme pour un outil. Après deux échecs d'affilée —
+un seul serait peut-être un incident réseau —, `/health` répond **503** avec
+un motif sommaire :
+
+    {"status":"failing","sessionExists":true,
+     "session":{"status":"failing","reason":"auth_required",
+                "since":"…","checkedAt":"…"}}
+
+`reason` vaut `auth_required` (QCM redemandé, appareil révoqué : relancer
+`login`), `school_unavailable` (maintenance École Directe), `no_session` ou
+`error`. Le `HEALTHCHECK` Docker passe alors le conteneur en `unhealthy`, et
+la supervision (Uptime Kuma, Gatus) alerte sur le 503 via le tailnet —
+`http://<ip-tailscale>:8789/health`, en n'acceptant que 2xx. Le serveur
+n'envoie lui-même aucune notification.
 
 ### Connecter un client
 

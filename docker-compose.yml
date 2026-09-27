@@ -26,6 +26,8 @@ services:
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-${PUBLISH_ADDRESS}:${MCP_HTTP_PORT:-8787}}
       READ_ONLY: ${READ_ONLY:-true}
       SESSION_MAX_AGE_MS: ${SESSION_MAX_AGE_MS:-}
+      # How often the session is checked for /health (default 15 min, 0 = off).
+      HEALTH_CHECK_INTERVAL_MS: ${HEALTH_CHECK_INTERVAL_MS:-}
     volumes:
       - session:/data
 

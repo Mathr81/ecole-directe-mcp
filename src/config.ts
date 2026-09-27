@@ -31,11 +31,14 @@ export interface Config {
   downloadDir: string;
   readOnly: boolean;
   sessionMaxAgeMs: number;
+  /** HTTP transport: how often to check the session works (0 disables). */
+  healthCheckIntervalMs: number;
   http: HttpConfig;
   oauth: OAuthConfig;
 }
 
 const DEFAULT_SESSION_MAX_AGE_MS = 15 * 60 * 1000;
+const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
  * Loopback, deliberately. On the VPS this is set to the Tailscale interface
@@ -98,6 +101,10 @@ export function loadConfig(
     downloadDir: env.DOWNLOAD_DIR ?? join(homedir(), '.local', 'share', 'ecoledirecte-mcp', 'downloads'),
     readOnly: parseBoolean(env.READ_ONLY, options.readOnlyDefault ?? false),
     sessionMaxAgeMs: parsePositiveInt(env.SESSION_MAX_AGE_MS, DEFAULT_SESSION_MAX_AGE_MS),
+    healthCheckIntervalMs:
+      env.HEALTH_CHECK_INTERVAL_MS === '0'
+        ? 0
+        : parsePositiveInt(env.HEALTH_CHECK_INTERVAL_MS, DEFAULT_HEALTH_CHECK_INTERVAL_MS),
     http: {
       host,
       port,
