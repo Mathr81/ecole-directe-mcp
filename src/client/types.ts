@@ -49,6 +49,12 @@ export interface LoginCredentials {
 export interface Grade {
   id: string;
   subject: string;
+  subjectCode: string;
+  /** Period label ("1er Semestre"), empty when unknown. */
+  period: string;
+  periodCode: string;
+  /** Kind of assessment as École Directe labels it ("Interrogation Ecrite"…). */
+  type: string;
   label: string;
   /** Null when the mark has no numeric value — see `status`. */
   value: number | null;
@@ -60,14 +66,109 @@ export interface Grade {
   date: string;
   coefficient: number;
   classAverage: number | null;
+  classMin: number | null;
+  classMax: number | null;
+}
+
+export interface GradePeriodSubject {
+  code: string;
+  label: string;
+  /** Subject coefficient in the overall average. */
+  coefficient: number;
+  /** Published by École Directe only once the period is closed. */
+  officialAverage: number | null;
+}
+
+export interface GradePeriod {
+  code: string;
+  label: string;
+  start: string;
+  end: string;
+  closed: boolean;
+  /** The whole-year period, which spans every mark. */
+  annual: boolean;
+  subjects: GradePeriodSubject[];
+  officialOverall: number | null;
+}
+
+export interface SubjectAverage {
+  code: string;
+  subject: string;
+  coefficient: number;
+  /** Computed here, on /20: École Directe withholds averages until the period closes. */
+  average: number | null;
+  /** Same formula over each mark's class average — an estimate, not the official figure. */
+  classAverageEstimate: number | null;
+  gradeCount: number;
+  officialAverage: number | null;
+}
+
+export interface PeriodAverages {
+  code: string;
+  label: string;
+  start: string;
+  end: string;
+  closed: boolean;
+  annual: boolean;
+  overall: number | null;
+  officialOverall: number | null;
+  subjects: SubjectAverage[];
+}
+
+export interface Attachment {
+  id: string;
+  filename: string;
+  /** Pass as `fileType` to download_document. */
+  fileType: string;
+  sizeBytes: number;
 }
 
 export interface HomeworkItem {
   id: string;
   subject: string;
+  teacher: string | null;
   dueDate: string;
+  givenOn: string | null;
   description: string;
   done: boolean;
+  /** École Directe's `interrogation` flag: a test is scheduled for this date. */
+  isTest: boolean;
+  /** What was done in the lesson where the homework was set. */
+  lessonContent: string | null;
+  attachments: Attachment[];
+}
+
+/** What was done in class on a date — often with no homework attached. */
+export interface Lesson {
+  date: string;
+  subject: string;
+  teacher: string | null;
+  content: string | null;
+  attachments: Attachment[];
+}
+
+export interface HomeworkReport {
+  homework: HomeworkItem[];
+  lessons: Lesson[];
+}
+
+export type DocumentCategory =
+  | 'bulletin'
+  | 'vie scolaire'
+  | 'administratif'
+  | 'facture'
+  | 'inscription'
+  | 'entreprise';
+
+export interface SchoolDocument {
+  id: string;
+  category: DocumentCategory;
+  label: string;
+  date: string;
+  /** Pass as `fileType` to download_document. */
+  fileType: string;
+  /** Pass as `schoolYear` to download_document; null for the current year. */
+  schoolYear: string | null;
 }
 
 export interface TimetableSlot {
@@ -84,6 +185,8 @@ export interface TimetableSlot {
   start: string;
   end: string;
   cancelled: boolean;
+  /** École Directe's `isModifie`: time, room or teacher changed — it does not say which. */
+  modified: boolean;
 }
 
 export interface SchoolLifeEntry {
@@ -159,7 +262,8 @@ export interface EcoleDirecteClient {
   ): Promise<Session>;
   refreshSession(session: Session): Promise<Session>;
   getGrades(session: Session, schoolYear?: string): Promise<Grade[]>;
-  getHomework(session: Session, fromDate: string, toDate: string): Promise<HomeworkItem[]>;
+  getAverages(session: Session, schoolYear?: string): Promise<PeriodAverages[]>;
+  getHomework(session: Session, fromDate: string, toDate: string): Promise<HomeworkReport>;
   markHomeworkDone(session: Session, homeworkId: string, done: boolean): Promise<void>;
   getTimetable(session: Session, fromDate: string, toDate: string): Promise<TimetableSlot[]>;
   getSchoolLife(session: Session): Promise<SchoolLifeEntry[]>;
@@ -167,11 +271,13 @@ export interface EcoleDirecteClient {
   getTimeline(session: Session): Promise<TimelineEntry[]>;
   getMessages(session: Session, folder: MessageFolder, limit: number): Promise<MessageSummary[]>;
   getMessage(session: Session, messageId: string): Promise<MessageDetail>;
+  getDocuments(session: Session, schoolYear?: string): Promise<SchoolDocument[]>;
   downloadDocument(
     session: Session,
     fileId: string,
     fileType: string,
     destinationDir: string,
+    schoolYear?: string,
   ): Promise<DownloadResult>;
   getAuthStatus(session: Session | null): Promise<AuthStatus>;
 }

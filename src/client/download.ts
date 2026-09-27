@@ -96,11 +96,18 @@ export async function fetchDocument(
   fileId: string,
   fileType: string,
   destinationDir: string,
+  schoolYear?: string,
 ): Promise<DownloadResult> {
   const url = new URL(`${BASE_URL}/v3/telechargement.awp`);
   url.searchParams.set('verbe', 'get');
   url.searchParams.set('fichierId', fileId);
   url.searchParams.set('leTypeDeFichier', fileType);
+  if (schoolYear) {
+    // An archived document (last year's bulletin) answers X-Code 403 unless
+    // the request names its year.
+    url.searchParams.set('archive', 'true');
+    url.searchParams.set('anneeArchive', schoolYear);
+  }
   url.searchParams.set('v', API_VERSION);
 
   const response = await fetch(url, {

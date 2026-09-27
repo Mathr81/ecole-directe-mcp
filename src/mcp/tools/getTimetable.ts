@@ -12,7 +12,8 @@ export function registerGetTimetable(server: McpServer, context: ToolContext): v
         "Récupère l'emploi du temps de l'élève entre deux dates (AAAA-MM-JJ), trié chronologiquement. " +
         "`group` est le code du groupe pour un cours en groupe : plusieurs créneaux simultanés du même " +
         "groupe sont des alternatives (un par professeur ou salle), l'élève n'en suit qu'un, et École " +
-        "Directe ne dit pas lequel.",
+        "Directe ne dit pas lequel. `cancelled` signale un cours annulé, `modified` un cours modifié " +
+        "(horaire, salle ou professeur : École Directe ne précise pas quoi).",
       inputSchema: {
         fromDate: isoDate('Date de début, AAAA-MM-JJ'),
         toDate: isoDate('Date de fin, AAAA-MM-JJ (incluse)'),

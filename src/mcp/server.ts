@@ -4,6 +4,8 @@ import type { EcoleDirecteClient } from '../client/types.js';
 import type { SessionBox } from '../client/sessionBox.js';
 import type { DownloadLinks } from '../transport/downloadLinks.js';
 import { registerGetGrades } from './tools/getGrades.js';
+import { registerGetAverages } from './tools/getAverages.js';
+import { registerGetDocuments } from './tools/getDocuments.js';
 import { registerGetHomework } from './tools/getHomework.js';
 import { registerGetTimetable } from './tools/getTimetable.js';
 import { registerGetSchoolLife } from './tools/getSchoolLife.js';
@@ -30,6 +32,7 @@ export interface ToolContext {
 export function buildServer(context: ToolContext): McpServer {
   const server = new McpServer({ name: 'ecoledirecte-mcp', version: '0.1.0' });
   registerGetGrades(server, context);
+  registerGetAverages(server, context);
   registerGetHomework(server, context);
   registerGetTimetable(server, context);
   registerGetSchoolLife(server, context);
@@ -37,6 +40,7 @@ export function buildServer(context: ToolContext): McpServer {
   registerGetTimeline(server, context);
   registerGetAuthStatus(server, context);
   registerMarkHomeworkDone(server, context);
+  registerGetDocuments(server, context);
   registerDownloadDocument(server, context);
   registerGetMessages(server, context);
   registerReadMessage(server, context);

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolContext } from '../server.js';
 import { runTool } from '../runTool.js';
+import { schoolYear } from '../schoolYear.js';
 import { extractText } from '../../client/extractText.js';
 
 export function registerDownloadDocument(server: McpServer, context: ToolContext): void {
@@ -21,17 +22,22 @@ export function registerDownloadDocument(server: McpServer, context: ToolContext
           .string()
           .describe(
             'Type de fichier École Directe : "PIECE_JOINTE" (pièce jointe d\'un message), ' +
-              '"FICHIER_CDT" (cahier de textes), "CLOUD" (fichier du cloud). Vide pour un document administratif.',
+              '"FICHIER_CDT" (cahier de textes), "CLOUD" (fichier du cloud), ou le `fileType` donné ' +
+              'par `get_documents` pour un bulletin ou un document administratif.',
           ),
+        schoolYear: schoolYear.describe(
+          "Année scolaire d'un document archivé, telle que donnée par `get_documents` (ex: \"2025-2026\").",
+        ),
       },
     },
-    async ({ fileId, fileType }) =>
+    async ({ fileId, fileType, schoolYear: year }) =>
       runTool(context.sessionBox, async (session) => {
         const { path, ...file } = await context.client.downloadDocument(
           session,
           fileId,
           fileType,
           context.config.downloadDir,
+          year,
         );
         const extracted = await extractText(path, file.mimeType);
         const text = {

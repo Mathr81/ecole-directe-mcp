@@ -82,6 +82,26 @@ describe('fetchDocument', () => {
     expect(result.path.endsWith('Reglement_EPS_élève_.docx')).toBe(true);
   });
 
+  it('asks for the archive of a past school year', async () => {
+    // Observed: a bulletin from last year answers X-Code 403 unless the
+    // request names its archive year.
+    const calls: URL[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        calls.push(url);
+        return new Response(new Uint8Array([0x25]), { status: 200, headers: { 'content-disposition': 'attachment; filename="Note_A002.pdf"' } });
+      }),
+    );
+
+    await withTempDir((dir) => fetchDocument(makeSession(), '10339', 'Note', dir, '2025-2026'));
+    await withTempDir((dir) => fetchDocument(makeSession(), '2149', '', dir));
+
+    expect(calls[0].searchParams.get('archive')).toBe('true');
+    expect(calls[0].searchParams.get('anneeArchive')).toBe('2025-2026');
+    expect(calls[1].searchParams.has('archive')).toBe(false);
+  });
+
   it('writes the bytes it received', async () => {
     stubBinary(new Uint8Array([1, 2, 3, 4, 5]), { 'content-disposition': 'attachment; filename="x.bin"' });
 

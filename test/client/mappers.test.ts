@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { disciplineLabels, mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable, stripHtml } from '../../src/client/mappers.js';
+import { disciplineLabels, mapClassLife, mapDocuments, mapPeriods, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable, stripHtml } from '../../src/client/mappers.js';
 import {
   makeRawAttendanceItem,
   makeRawClassLife,
@@ -59,6 +59,123 @@ describe('mapGrades', () => {
   });
 });
 
+describe('mapGrades period and class fields', () => {
+  it('carries the subject code, the period and the class spread', () => {
+    const [mark] = mapGrades(
+      [makeRawMark({ codeMatiere: 'PH-CH', codePeriode: 'A001', typeDevoir: 'Interrogation Ecrite', minClasse: '8.00', maxClasse: '10,00' })],
+      new Map(),
+      new Map([['A001', '1er Semestre']]),
+    );
+
+    expect(mark).toMatchObject({
+      subjectCode: 'PH-CH',
+      periodCode: 'A001',
+      period: '1er Semestre',
+      type: 'Interrogation Ecrite',
+      classMin: 8,
+      classMax: 10,
+    });
+  });
+});
+
+describe('mapPeriods', () => {
+  const discipline = (overrides: Record<string, unknown> = {}) => ({
+    codeMatiere: 'MATHS',
+    discipline: 'MATHEMATIQUES',
+    moyenne: '',
+    coef: 3,
+    groupeMatiere: false,
+    sousMatiere: false,
+    ...overrides,
+  });
+
+  it('lists each period with its subjects and their coefficients', () => {
+    const [period] = mapPeriods([
+      {
+        codePeriode: 'A001',
+        periode: '1er Semestre',
+        dateDebut: '2026-09-01',
+        dateFin: '2027-01-15',
+        cloture: false,
+        annuel: false,
+        ensembleMatieres: {
+          moyenneGenerale: '5',
+          disciplines: [
+            discipline(),
+            discipline({ codeMatiere: 'SCI', discipline: 'SCIENCES', groupeMatiere: true }),
+            discipline({ codeMatiere: 'MATHS', discipline: 'ALGEBRE', sousMatiere: true }),
+          ],
+        },
+      },
+    ]);
+
+    expect(period).toEqual({
+      code: 'A001',
+      label: '1er Semestre',
+      start: '2026-09-01',
+      end: '2027-01-15',
+      closed: false,
+      annual: false,
+      // Group headers and sub-subjects are not subjects of their own.
+      subjects: [{ code: 'MATHS', label: 'MATHEMATIQUES', coefficient: 3, officialAverage: null }],
+      // Not closed: École Directe fills these with placeholder values ("5").
+      officialOverall: null,
+    });
+  });
+
+  it('reads the official averages only once the period is closed', () => {
+    const [period] = mapPeriods(
+      [
+      {
+        codePeriode: 'A001',
+        periode: '1er Semestre',
+        cloture: true,
+        annuel: false,
+        ensembleMatieres: { moyenneGenerale: '13,9', disciplines: [discipline({ moyenne: '13,8' })] },
+      },
+      ],
+      { overallPublished: true },
+    );
+
+    expect(period.officialOverall).toBe(13.9);
+    expect(period.subjects[0].officialAverage).toBe(13.8);
+  });
+
+  it('ignores the overall figure when the school does not publish one', () => {
+    // Observed on closed periods of a school with parametrage.moyenneGenerale
+    // false: the field held "1" and "2" — nothing like the real average.
+    const [period] = mapPeriods(
+      [{ codePeriode: 'A001', periode: 'S1', cloture: true, ensembleMatieres: { moyenneGenerale: '1', disciplines: [] } }],
+      { overallPublished: false },
+    );
+
+    expect(period.officialOverall).toBeNull();
+  });
+});
+
+describe('mapDocuments', () => {
+  it('flattens the categories, keeping the fileType and school year needed to download each one', () => {
+    const documents = mapDocuments(
+      {
+        notes: [{ id: 10339, libelle: 'Bulletin 2ème Semestre', date: '2026-06-04', type: 'Note' }],
+        administratifs: [{ id: 2056, libelle: 'Certificat de Scolarité', date: '2025-09-02', type: '' }],
+        factures: [],
+        listesPiecesAVerser: { listesPieces: [] },
+      },
+      '2025-2026',
+    );
+
+    expect(documents).toEqual([
+      { id: '10339', category: 'bulletin', label: 'Bulletin 2ème Semestre', date: '2026-06-04', fileType: 'Note', schoolYear: '2025-2026' },
+      { id: '2056', category: 'administratif', label: 'Certificat de Scolarité', date: '2025-09-02', fileType: '', schoolYear: '2025-2026' },
+    ]);
+  });
+
+  it('tolerates a missing payload', () => {
+    expect(mapDocuments(undefined, null)).toEqual([]);
+  });
+});
+
 describe('disciplineLabels', () => {
   it('maps each subject code to its label across periods', () => {
     const labels = disciplineLabels([
@@ -95,29 +212,90 @@ describe('stripHtml', () => {
 });
 
 describe('mapHomework', () => {
-  it('flattens per-date subjects that have homework, using the requested date (not the response date), skipping subjects without homework, and stripping HTML', () => {
-    const items = mapHomework([
+  it('flattens per-date subjects that have homework, using the requested date (not the response date), and stripping HTML', () => {
+    const { homework } = mapHomework([
       {
         date: '2026-01-12',
         response: { date: '2099-12-31', matieres: [makeRawHomeworkSubject(), makeRawHomeworkSubject({ aFaire: undefined })] },
       },
     ]);
 
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
+    expect(homework).toHaveLength(1);
+    expect(homework[0]).toMatchObject({
       id: '42',
       subject: 'Mathématiques',
+      teacher: 'M. Martin',
       dueDate: '2026-01-12',
+      givenOn: '2026-01-10',
       done: false,
+      isTest: false,
       description: 'Exercices 1 à 5 page 30',
+      lessonContent: null,
+      attachments: [],
     });
+  });
+
+  it('flags a test, and lists attachments with the fileType download_document needs', () => {
+    const subject = makeRawHomeworkSubject({ interrogation: true });
+    subject.aFaire!.documents = [
+      { id: 593, libelle: 'Cours 21 09.pdf', taille: 49312, type: 'FICHIER_CDT', signatureDemandee: false, etatSignatures: [], signature: {} },
+    ];
+    subject.aFaire!.contenuDeSeance = { contenu: '<p>Loi binomiale</p>', documents: [], commentaires: [] };
+
+    const { homework } = mapHomework([{ date: '2026-09-22', response: { date: '2026-09-22', matieres: [subject] } }]);
+
+    expect(homework[0]).toMatchObject({
+      isTest: true,
+      lessonContent: 'Loi binomiale',
+      attachments: [{ id: '593', filename: 'Cours 21 09.pdf', fileType: 'FICHIER_CDT', sizeBytes: 49312 }],
+    });
+  });
+
+  it('keeps what was done in class on each date, including lessons that set no homework', () => {
+    // Observed: most entries are lessons with content and sometimes a course
+    // PDF, but no aFaire — they used to be dropped.
+    const lesson = makeRawHomeworkSubject({
+      aFaire: undefined,
+      matiere: 'MATHS EXPERTES',
+      nomProf: 'Mme A.',
+      contenuDeSeance: {
+        idDevoir: 7,
+        contenu: '<p>Congruences</p>',
+        documents: [
+          { id: 594, libelle: 'Cours.pdf', taille: 10, type: 'FICHIER_CDT', signatureDemandee: false, etatSignatures: [], signature: {} },
+        ],
+        commentaires: [],
+        elementsProg: [],
+        liensManuel: [],
+      },
+    });
+    const empty = makeRawHomeworkSubject({ aFaire: undefined });
+
+    const { homework, lessons } = mapHomework([{ date: '2026-09-21', response: { date: '2026-09-21', matieres: [lesson, empty] } }]);
+
+    expect(homework).toEqual([]);
+    expect(lessons).toEqual([
+      {
+        date: '2026-09-21',
+        subject: 'MATHS EXPERTES',
+        teacher: 'Mme A.',
+        content: 'Congruences',
+        attachments: [{ id: '594', filename: 'Cours.pdf', fileType: 'FICHIER_CDT', sizeBytes: 10 }],
+      },
+    ]);
   });
 });
 
 describe('mapTimetable', () => {
   it('maps course slots, treating empty prof/salle as null', () => {
     const [slot] = mapTimetable([makeRawTimetableCourse({ prof: '', salle: 'B12', isAnnule: true })]);
-    expect(slot).toMatchObject({ teacher: null, room: 'B12', cancelled: true });
+    expect(slot).toMatchObject({ teacher: null, room: 'B12', cancelled: true, modified: false });
+  });
+
+  it('flags a modified course', () => {
+    const [slot] = mapTimetable([makeRawTimetableCourse({ isModifie: true })]);
+
+    expect(slot.modified).toBe(true);
   });
 
   it('sorts slots chronologically, since École Directe returns them in no particular order', () => {

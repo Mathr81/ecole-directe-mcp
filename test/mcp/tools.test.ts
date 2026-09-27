@@ -24,7 +24,7 @@ describe('get_grades tool', () => {
   it('returns grades from the underlying client as JSON', async () => {
     const fake = new FakeEcoleDirecteClient();
     fake.grades = [
-      { id: '1', subject: 'Mathématiques', label: 'Contrôle', value: 14.5, scale: 20, date: '2026-01-15', coefficient: 1, classAverage: 12.3, status: null, significant: true },
+      { id: '1', subject: 'Mathématiques', label: 'Contrôle', value: 14.5, scale: 20, date: '2026-01-15', coefficient: 1, classAverage: 12.3, status: null, significant: true, subjectCode: 'MATHS', period: '', periodCode: 'A001', type: '', classMin: null, classMax: null },
     ];
     const session = makeSession();
     const mcpClient = await connect({
@@ -61,7 +61,23 @@ describe('get_grades tool', () => {
 describe('get_homework tool', () => {
   it('passes date range arguments through and returns homework as JSON', async () => {
     const fake = new FakeEcoleDirecteClient();
-    fake.homework = [{ id: '42', subject: 'Mathématiques', dueDate: '2026-01-12', description: 'Ex 1-5', done: false }];
+    fake.homework = {
+      homework: [
+        {
+          id: '42',
+          subject: 'Mathématiques',
+          teacher: 'M. Martin',
+          dueDate: '2026-01-12',
+          givenOn: '2026-01-05',
+          description: 'Ex 1-5',
+          done: false,
+          isTest: false,
+          lessonContent: null,
+          attachments: [],
+        },
+      ],
+      lessons: [],
+    };
     const session = makeSession();
     const mcpClient = await connect({
       client: fake,
@@ -75,6 +91,50 @@ describe('get_homework tool', () => {
     });
 
     expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.homework);
+  });
+});
+
+describe('get_averages tool', () => {
+  it('returns the computed averages for the requested year', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.averages = [
+      {
+        code: 'A001',
+        label: '1er Semestre',
+        start: '2026-09-01',
+        end: '2027-01-15',
+        closed: false,
+        annual: false,
+        overall: 14,
+        officialOverall: null,
+        subjects: [
+          { code: 'MATHS', subject: 'MATHEMATIQUES', coefficient: 1, average: 14, classAverageEstimate: 11, gradeCount: 2, officialAverage: null },
+        ],
+      },
+    ];
+    const session = makeSession();
+    const mcpClient = await connect({ client: fake, sessionBox: { get: () => session, set: async () => {} }, config: loadConfig({}) });
+
+    const result = await mcpClient.callTool({ name: 'get_averages', arguments: { schoolYear: '2025-2026' } });
+
+    expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.averages);
+    expect(fake.lastArgs.getAverages).toEqual(['2025-2026']);
+  });
+});
+
+describe('get_documents tool', () => {
+  it('lists documents for the requested year', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.documents = [
+      { id: '10339', category: 'bulletin', label: 'Bulletin 2ème Semestre', date: '2026-06-04', fileType: 'Note', schoolYear: '2025-2026' },
+    ];
+    const session = makeSession();
+    const mcpClient = await connect({ client: fake, sessionBox: { get: () => session, set: async () => {} }, config: loadConfig({}) });
+
+    const result = await mcpClient.callTool({ name: 'get_documents', arguments: { schoolYear: '2025-2026' } });
+
+    expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.documents);
+    expect(fake.lastArgs.getDocuments).toEqual(['2025-2026']);
   });
 });
 
@@ -208,6 +268,22 @@ describe('download_document tool', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('passes the school year through, for archived documents', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.downloadResult = { path: '/downloads/Note_A002.pdf', filename: 'Note_A002.pdf', mimeType: 'image/png', sizeBytes: 1 };
+    const session = makeSession();
+    const mcpClient = await connect({ client: fake, sessionBox: { get: () => session, set: async () => {} }, config: loadConfig({}) });
+
+    await mcpClient.callTool({
+      name: 'download_document',
+      arguments: { fileId: '10339', fileType: 'Note', schoolYear: '2025-2026' },
+    });
+
+    expect(fake.lastArgs.downloadDocument?.[0]).toBe('10339');
+    expect(fake.lastArgs.downloadDocument?.[1]).toBe('Note');
+    expect(fake.lastArgs.downloadDocument?.[3]).toBe('2025-2026');
   });
 
   it('says why there is no text for a format it cannot read', async () => {

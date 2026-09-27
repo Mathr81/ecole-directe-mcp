@@ -194,6 +194,7 @@ export function withAutoRefresh(
     completeTwoFactor: (challenge, answer, credentials) => client.completeTwoFactor(challenge, answer, credentials),
     refreshSession: (session) => client.refreshSession(session),
     getGrades: (session, schoolYear) => withRetry(session, (s) => client.getGrades(s, schoolYear)),
+    getAverages: (session, schoolYear) => withRetry(session, (s) => client.getAverages(s, schoolYear)),
     getHomework: (session, fromDate, toDate) => withRetry(session, (s) => client.getHomework(s, fromDate, toDate)),
     markHomeworkDone: (session, homeworkId, done) => withRetry(session, (s) => client.markHomeworkDone(s, homeworkId, done)),
     getTimetable: (session, fromDate, toDate) => withRetry(session, (s) => client.getTimetable(s, fromDate, toDate)),
@@ -202,8 +203,9 @@ export function withAutoRefresh(
     getTimeline: (session) => withRetry(session, (s) => client.getTimeline(s)),
     getMessages: (session, folder, limit) => withRetry(session, (s) => client.getMessages(s, folder, limit)),
     getMessage: (session, messageId) => withRetry(session, (s) => client.getMessage(s, messageId)),
-    downloadDocument: (session, fileId, fileType, destinationDir) =>
-      withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir)),
+    getDocuments: (session, schoolYear) => withRetry(session, (s) => client.getDocuments(s, schoolYear)),
+    downloadDocument: (session, fileId, fileType, destinationDir, schoolYear) =>
+      withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir, schoolYear)),
     // getAuthStatus never touches the network (Task 6's adapter only reads
     // local session fields for it), so it can never throw a retriable error.
     // Wrapping it in withRetry would only add a pointless proactive-refresh

@@ -61,6 +61,8 @@ export function createCachingClient(
     completeTwoFactor: (challenge, answer, credentials) => enqueue(() => client.completeTwoFactor(challenge, answer, credentials)),
     refreshSession: (session: Session) => enqueue(() => client.refreshSession(session)),
     getGrades: (session, schoolYear) => cached(`grades:${session.username}:${schoolYear ?? ''}`, () => client.getGrades(session, schoolYear)),
+    getAverages: (session, schoolYear) =>
+      cached(`averages:${session.username}:${schoolYear ?? ''}`, () => client.getAverages(session, schoolYear)),
     getHomework: (session, fromDate, toDate) =>
       cached(`homework:${session.username}:${fromDate}:${toDate}`, () => client.getHomework(session, fromDate, toDate)),
     markHomeworkDone: (session, homeworkId, done) =>
@@ -79,8 +81,10 @@ export function createCachingClient(
       cached(`messages:${session.username}:${folder}:${limit}`, () => client.getMessages(session, folder, limit)),
     getMessage: (session, messageId) =>
       cached(`message:${session.username}:${messageId}`, () => client.getMessage(session, messageId)),
-    downloadDocument: (session, fileId, fileType, destinationDir) =>
-      enqueue(() => client.downloadDocument(session, fileId, fileType, destinationDir)),
+    getDocuments: (session, schoolYear) =>
+      cached(`documents:${session.username}:${schoolYear ?? ''}`, () => client.getDocuments(session, schoolYear)),
+    downloadDocument: (session, fileId, fileType, destinationDir, schoolYear) =>
+      enqueue(() => client.downloadDocument(session, fileId, fileType, destinationDir, schoolYear)),
     getAuthStatus: (session) => enqueue(() => client.getAuthStatus(session)),
   };
 }

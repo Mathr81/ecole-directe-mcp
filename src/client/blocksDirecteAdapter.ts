@@ -7,8 +7,10 @@ import {
   mapCaughtError,
   wrapCall,
 } from './errors.js';
-import { disciplineLabels, mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
+import { disciplineLabels, mapClassLife, mapGrades, mapPeriods, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
 import { fetchDocument } from './download.js';
+import { fetchDocuments } from './documents.js';
+import { computeAverages } from './averages.js';
 import { fetchMessage, fetchMessages } from './messaging.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
 
@@ -101,6 +103,26 @@ export function clientFor(session: Session): Client {
   return client;
 }
 
+async function mapMarks(client: Client, schoolYear: string | undefined) {
+  const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
+  const labels = disciplineLabels(marks.periodes);
+  // Archived years list only a handful of disciplines in their periods,
+  // leaving most marks with neither libelleMatiere nor a label for their
+  // code. The current year usually knows those codes: one extra call,
+  // only when something is actually missing.
+  if (schoolYear && marks.notes.some((note) => !note.libelleMatiere && !labels.has(note.codeMatiere))) {
+    const current = await client.marks.getMark();
+    for (const [code, label] of disciplineLabels(current?.periodes)) {
+      if (!labels.has(code)) labels.set(code, label);
+    }
+  }
+  const periods = mapPeriods(marks.periodes as unknown as Parameters<typeof mapPeriods>[0], {
+    overallPublished: (marks.parametrage as { moyenneGenerale?: boolean } | undefined)?.moyenneGenerale === true,
+  });
+  const periodLabels = new Map(periods.map((period) => [period.code, period.label]));
+  return { grades: mapGrades(marks.notes, labels, periodLabels), periods };
+}
+
 export function createBlocksDirecteClient(): EcoleDirecteClient {
   return {
     async login({ username, password, deviceUUID }: LoginCredentials): Promise<Session | TwoFactorChallenge> {
@@ -143,21 +165,13 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     },
 
     async getGrades(session, schoolYear) {
+      return wrapCall(async () => mapMarks(clientFor(session), schoolYear).then(({ grades }) => grades));
+    },
+
+    async getAverages(session, schoolYear) {
       return wrapCall(async () => {
-        const client = clientFor(session);
-        const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
-        const labels = disciplineLabels(marks.periodes);
-        // Archived years list only a handful of disciplines in their periods,
-        // leaving most marks with neither libelleMatiere nor a label for their
-        // code. The current year usually knows those codes: one extra call,
-        // only when something is actually missing.
-        if (schoolYear && marks.notes.some((note) => !note.libelleMatiere && !labels.has(note.codeMatiere))) {
-          const current = await client.marks.getMark();
-          for (const [code, label] of disciplineLabels(current?.periodes)) {
-            if (!labels.has(code)) labels.set(code, label);
-          }
-        }
-        return mapGrades(marks.notes, labels);
+        const { grades, periods } = await mapMarks(clientFor(session), schoolYear);
+        return computeAverages(grades, periods);
       });
     },
 
@@ -235,8 +249,12 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
 
     // Direct HTTP, not client.downloader: the library's getStream() drops the
     // response headers that carry the real filename.
-    async downloadDocument(session, fileId, fileType, destinationDir) {
-      return wrapCall(() => fetchDocument(session, fileId, fileType, destinationDir));
+    async getDocuments(session, schoolYear) {
+      return wrapCall(() => fetchDocuments(session, schoolYear));
+    },
+
+    async downloadDocument(session, fileId, fileType, destinationDir, schoolYear) {
+      return wrapCall(() => fetchDocument(session, fileId, fileType, destinationDir, schoolYear));
     },
 
     async getAuthStatus(session) {

@@ -15,17 +15,10 @@
  *    only on the per-message endpoint, which is why reading a message is a
  *    separate call (and a separate tool) rather than a flag on the list.
  */
-import { EcoleDirecteApiError, PossiblyExpiredSessionError, mapErrorCode } from './errors.js';
+import { PossiblyExpiredSessionError } from './errors.js';
+import { post } from './edHttp.js';
 import { stripHtml } from './mappers.js';
 import type { MessageDetail, MessageFolder, MessageSummary, Session } from './types.js';
-
-const BASE_URL = 'https://api.ecoledirecte.com';
-
-/** Must match `edAuth`'s constants: École Directe binds a token to its User-Agent. */
-const API_VERSION = '8.0.0';
-const USER_AGENT =
-  'BlocksDirecte/1.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148  EDMOBILE v' +
-  API_VERSION;
 
 interface RawPerson {
   nom?: string;
@@ -49,12 +42,6 @@ interface RawMessage {
   from?: RawPerson;
   to?: RawPerson[];
   files?: RawFile[];
-}
-
-interface Envelope {
-  code: number;
-  message?: string;
-  data?: unknown;
 }
 
 function looksBase64(value: string): boolean {
@@ -93,35 +80,6 @@ function decodeMaybeBase64(value: string | undefined): string {
 function personName(person: RawPerson | undefined): string {
   if (!person) return '';
   return [person.civilite, person.prenom, person.nom].filter(Boolean).join(' ').trim();
-}
-
-async function post(session: Session, path: string, payload: Record<string, unknown>): Promise<unknown> {
-  const url = new URL(`${BASE_URL}${path}`);
-  url.searchParams.set('v', API_VERSION);
-  const response = await fetch(url, {
-    method: 'POST',
-    body: new URLSearchParams({ data: JSON.stringify(payload) }).toString(),
-    headers: {
-      'Content-Type': 'x-www-form-urlencoded',
-      'User-Agent': USER_AGENT,
-      'X-Token': session.token,
-    },
-    redirect: 'manual',
-  });
-  if (!response.ok) {
-    throw new EcoleDirecteApiError(
-      response.status,
-      `École Directe a répondu ${response.status} ${response.statusText} sur ${path}.`,
-    );
-  }
-  const body = (await response.json()) as Envelope;
-  if (body.code !== 200) {
-    // Unlike the data modules of @blockshub/blocksdirecte, this code path does
-    // see École Directe's numeric code — so 520/525 become a real
-    // TokenExpiredError and withAutoRefresh can retry properly.
-    throw mapErrorCode(body.code, body.message || `École Directe a renvoyé le code ${body.code}.`);
-  }
-  return body.data;
 }
 
 export function mapMessageSummary(raw: RawMessage, folder: MessageFolder): MessageSummary {

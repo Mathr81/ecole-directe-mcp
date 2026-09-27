@@ -7,7 +7,11 @@ export function registerGetClassLife(server: McpServer, context: ToolContext): v
     'get_class_life',
     {
       title: 'Vie de classe',
-      description: "Récupère le cahier de texte / vie de la classe de l'élève.",
+      description:
+        "Récupère la rubrique « Vie de la classe » : informations publiées pour la classe par l'équipe " +
+        "pédagogique, et commentaires. Ce n'est pas le cahier de textes (devoirs et contenu des séances : " +
+        "`get_homework`). `content: null` et `comments: []` signifient que rien n'est publié — c'est ce " +
+        "qu'École Directe renvoie, pas une erreur.",
       inputSchema: {},
     },
     async () =>

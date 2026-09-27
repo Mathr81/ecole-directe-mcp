@@ -20,7 +20,7 @@ afterEach(async () => {
 async function start(env: Record<string, string | undefined> = {}) {
   const fake = new FakeEcoleDirecteClient();
   fake.timetable = [
-    { id: '1', subject: 'MATHS', teacher: null, room: null, group: null, start: '2026-09-09 08:00', end: '2026-09-09 09:00', cancelled: false },
+    { id: '1', subject: 'MATHS', teacher: null, room: null, group: null, start: '2026-09-09 08:00', end: '2026-09-09 09:00', cancelled: false, modified: false },
   ];
   const config = loadConfig(
     { MCP_AUTH_TOKEN: TOKEN, MCP_HTTP_HOST: '127.0.0.1', MCP_HTTP_PORT: '0', ...env },

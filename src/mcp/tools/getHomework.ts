@@ -9,9 +9,12 @@ export function registerGetHomework(server: McpServer, context: ToolContext): vo
     {
       title: 'Devoirs',
       description:
-        "Récupère les devoirs de l'élève entre deux dates (AAAA-MM-JJ). " +
-        "Ne couvre que les devoirs à venir (non encore échus) : École Directe ne fournit pas de " +
-        "listing en masse des devoirs déjà passés, seulement les devoirs futurs.",
+        "Cahier de textes entre deux dates (AAAA-MM-JJ) : `homework`, les devoirs à rendre ces jours-là " +
+        "(`isTest` signale une interrogation, `givenOn` le jour où il a été donné, `lessonContent` ce " +
+        "qui a été fait pendant cette séance), et `lessons`, le contenu des séances de ces jours-là, " +
+        "même sans devoir. Les pièces jointes se téléchargent avec `download_document` (leur `id` et " +
+        "leur `fileType`). École Directe ne couvre que les dates qu'il liste (observé : de la rentrée " +
+        "aux prochaines semaines).",
       inputSchema: {
         fromDate: isoDate('Date de début, AAAA-MM-JJ'),
         toDate: isoDate('Date de fin, AAAA-MM-JJ (incluse)'),

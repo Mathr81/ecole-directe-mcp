@@ -4,7 +4,9 @@ import type {
   DownloadResult,
   EcoleDirecteClient,
   Grade,
-  HomeworkItem,
+  HomeworkReport,
+  PeriodAverages,
+  SchoolDocument,
   LoginCredentials,
   MessageDetail,
   MessageFolder,
@@ -44,10 +46,12 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
   twoFactorChallenge: TwoFactorChallenge | null = null;
   refreshedSession: Session | null = null;
   grades: Grade[] = [];
-  homework: HomeworkItem[] = [];
+  averages: PeriodAverages[] = [];
+  homework: HomeworkReport = { homework: [], lessons: [] };
+  documents: SchoolDocument[] = [];
   timetable: TimetableSlot[] = [];
   schoolLife: SchoolLifeEntry[] = [];
-  classLife: ClassLifeSummary = { className: '', content: '', updatedAt: '', comments: [] };
+  classLife: ClassLifeSummary = { className: '', content: null, updatedAt: null, comments: [] };
   timeline: TimelineEntry[] = [];
   messages: MessageSummary[] = [];
   message: MessageDetail = {
@@ -65,6 +69,8 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
   callDelayMs = 0;
 
   callCounts: Partial<Record<MethodName, number>> = {};
+  /** Arguments of the latest call to each method, session and destination directory aside. */
+  lastArgs: Partial<Record<MethodName, unknown[]>> = {};
   globalInFlight = 0;
   globalMaxConcurrent = 0;
   private failQueues: Partial<Record<MethodName, Error[]>> = {};
@@ -109,7 +115,12 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
     return this.record('getGrades', () => this.grades);
   }
 
-  getHomework(_session: Session, _fromDate: string, _toDate: string): Promise<HomeworkItem[]> {
+  getAverages(_session: Session, schoolYear?: string): Promise<PeriodAverages[]> {
+    this.lastArgs.getAverages = [schoolYear];
+    return this.record('getAverages', () => this.averages);
+  }
+
+  getHomework(_session: Session, _fromDate: string, _toDate: string): Promise<HomeworkReport> {
     return this.record('getHomework', () => this.homework);
   }
 
@@ -141,12 +152,19 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
     return this.record('getMessage', () => this.message);
   }
 
+  getDocuments(_session: Session, schoolYear?: string): Promise<SchoolDocument[]> {
+    this.lastArgs.getDocuments = [schoolYear];
+    return this.record('getDocuments', () => this.documents);
+  }
+
   downloadDocument(
     _session: Session,
-    _fileId: string,
-    _fileType: string,
-    _destinationDir: string,
+    fileId: string,
+    fileType: string,
+    destinationDir: string,
+    schoolYear?: string,
   ): Promise<DownloadResult> {
+    this.lastArgs.downloadDocument = [fileId, fileType, destinationDir, schoolYear];
     return this.record('downloadDocument', () => this.downloadResult);
   }
 

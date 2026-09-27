@@ -29,15 +29,17 @@ explicite au lieu de faire tomber le serveur.
 | Outil | Rôle |
 | --- | --- |
 | `get_auth_status` | État de la session (présence, date du dernier rafraîchissement) |
-| `get_grades` | Notes de l'année scolaire |
-| `get_homework` | Devoirs entre deux dates |
+| `get_grades` | Notes d'une année scolaire, avec leur période |
+| `get_averages` | Moyennes par période, par matière et générale, calculées à partir des notes |
+| `get_homework` | Cahier de textes entre deux dates : devoirs (interrogations, pièces jointes) et contenu des séances |
 | `mark_homework_done` | Marquer un devoir fait / non fait (écriture) |
-| `get_timetable` | Emploi du temps entre deux dates |
+| `get_timetable` | Emploi du temps entre deux dates, trié, avec cours annulés et modifiés |
 | `get_school_life` | Vie scolaire (absences, retards, sanctions) |
 | `get_class_life` | Vie de la classe et commentaires |
 | `get_timeline` | Fil d'actualité personnel |
 | `get_messages` | Liste les messages d'un dossier (en-têtes seulement) |
 | `read_message` | Contenu d'un message, HTML retiré, avec ses pièces jointes |
+| `get_documents` | Bulletins, certificats et autres documents, années archivées comprises |
 | `download_document` | Télécharge un document dans `DOWNLOAD_DIR`, sous son vrai nom, et renvoie son texte (PDF, DOCX, TXT, HTML) ; plus son chemin en local, ou un lien temporaire en HTTP |
 
 La messagerie est en deux outils parce que l'API l'impose : la liste
@@ -55,6 +57,15 @@ ne désigne qu'un fichier que le serveur a lui-même écrit. Les liens vivent en
 mémoire et disparaissent au redémarrage. L'URL de base est l'origine de
 `MCP_PUBLIC_URL` si elle est définie, sinon la première entrée de
 `MCP_ALLOWED_HOSTS`.
+
+Les moyennes sont **calculées** et non lues : un établissement peut ne les
+publier qu'une fois la période close (`moyenneUniquementPeriodeCloture`), et
+École Directe renvoie alors des champs vides. Chaque note compte pour
+note/barème × 20 × coefficient, la moyenne générale pondère les matières par
+leur coefficient, et les notes non chiffrées ou non significatives sont
+exclues. Vérifié sur une année archivée : le calcul retombe exactement sur les
+moyennes officielles publiées. Celles-ci sont renvoyées à côté une fois la
+période close.
 
 ## Variables d'environnement
 
