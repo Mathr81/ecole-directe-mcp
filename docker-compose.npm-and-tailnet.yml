@@ -1,0 +1,26 @@
+# Override for serving both audiences at once, with Nginx Proxy Manager in
+# Docker:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.npm-and-tailnet.yml up -d
+#
+# (or set COMPOSE_FILE in .env so a bare `docker compose` picks both files).
+#
+# Unlike docker-compose.npm.yml, the port stays published on PUBLISH_ADDRESS —
+# the Tailscale IP, for your own machines with the fixed token — and the
+# container also joins NPM's network, so the proxy can reach it by service
+# name for the public Claude.ai connector with OAuth. In NPM, forward to:
+#
+#   Scheme http, Forward Hostname ecoledirecte-mcp, Forward Port 8787
+#
+# MCP_ALLOWED_HOSTS must then list both the tailnet address (with its port)
+# and the public domain.
+services:
+  ecoledirecte-mcp:
+    networks:
+      - default
+      - npm
+
+networks:
+  npm:
+    external: true
+    name: ${NPM_NETWORK:?définis NPM_NETWORK dans .env — le réseau Docker de Nginx Proxy Manager}

@@ -241,6 +241,19 @@ NPM : *Scheme* `http`, *Forward Hostname* `ecoledirecte-mcp`, *Forward Port*
 `8787`. Si NPM tourne sur l'hôte, garde `docker-compose.yml` seul avec
 `PUBLISH_ADDRESS=127.0.0.1`.
 
+Pour servir **les deux** à la fois — tailnet avec le jeton fixe pour tes
+machines, et connecteur Claude.ai public via NPM en conteneur —
+`docker-compose.npm-and-tailnet.yml` garde le port publié sur
+`PUBLISH_ADDRESS` (l'IP Tailscale) et rejoint en plus le réseau de NPM.
+Mettre dans `.env` :
+
+    COMPOSE_FILE=docker-compose.yml:docker-compose.npm-and-tailnet.yml
+    MCP_ALLOWED_HOSTS=<ip-tailscale>:<port>,ed.ton-domaine.fr
+
+`MCP_HTTP_PORT` ne règle que le port **côté hôte** ; dans le conteneur, le
+serveur écoute toujours sur 8787, qui est donc le *Forward Port* à donner à
+NPM.
+
 Ensuite, dans Claude.ai : Paramètres → Connecteurs → connecteur personnalisé,
 URL `https://ed.ton-domaine.fr/mcp`. Claude découvre le serveur
 d'autorisation, s'enregistre, et t'affiche l'écran de consentement où tu
