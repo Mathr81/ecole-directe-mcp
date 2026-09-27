@@ -21,7 +21,7 @@ describe('get_grades tool', () => {
   it('returns grades from the underlying client as JSON', async () => {
     const fake = new FakeEcoleDirecteClient();
     fake.grades = [
-      { id: '1', subject: 'Mathématiques', label: 'Contrôle', value: 14.5, scale: 20, date: '2026-01-15', coefficient: 1, classAverage: 12.3 },
+      { id: '1', subject: 'Mathématiques', label: 'Contrôle', value: 14.5, scale: 20, date: '2026-01-15', coefficient: 1, classAverage: 12.3, status: null, significant: true },
     ];
     const session = makeSession();
     const mcpClient = await connect({
@@ -73,6 +73,45 @@ describe('get_homework tool', () => {
 
     expect(JSON.parse(textOf(result as { content: unknown }))).toEqual(fake.homework);
   });
+});
+
+describe('date range validation', () => {
+  // A malformed date used to come back as `[]`, which an LLM reads as "no
+  // homework" rather than "you called me wrong".
+  async function call(name: string, fromDate: string, toDate: string) {
+    const fake = new FakeEcoleDirecteClient();
+    const session = makeSession();
+    const mcpClient = await connect({
+      client: fake,
+      sessionBox: { get: () => session, set: async () => {} },
+      config: loadConfig({}),
+    });
+    const result = await mcpClient.callTool({ name, arguments: { fromDate, toDate } });
+    return { fake, result, text: textOf(result as { content: unknown }) };
+  }
+
+  for (const name of ['get_homework', 'get_timetable']) {
+    it(`${name} rejects a date that is not AAAA-MM-JJ, without calling École Directe`, async () => {
+      const { fake, result, text } = await call(name, '2026-09-01', 'hier');
+
+      expect(result.isError).toBe(true);
+      expect(text).toContain('AAAA-MM-JJ');
+      expect(Object.keys(fake.callCounts)).toEqual([]);
+    });
+
+    it(`${name} rejects a well-formed but impossible date`, async () => {
+      const { result } = await call(name, '2026-13-45', '2026-12-31');
+
+      expect(result.isError).toBe(true);
+    });
+
+    it(`${name} rejects a range that ends before it starts`, async () => {
+      const { result, text } = await call(name, '2026-10-01', '2026-09-01');
+
+      expect(result.isError).toBe(true);
+      expect(text).toContain('fromDate');
+    });
+  }
 });
 
 describe('get_school_life tool', () => {

@@ -28,7 +28,7 @@ describe('wrapCall', () => {
 describe('withAutoRefresh', () => {
   it('passes through successful calls without refreshing', async () => {
     const fake = new FakeEcoleDirecteClient();
-    fake.grades = [{ id: '1', subject: 'Maths', label: 'DS', value: 15, scale: 20, date: '2026-01-01', coefficient: 1, classAverage: 10 }];
+    fake.grades = [{ id: '1', subject: 'Maths', label: 'DS', value: 15, scale: 20, date: '2026-01-01', coefficient: 1, classAverage: 10, status: null, significant: true }];
     const box = createSessionBox(makeSession(), async () => {});
     const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
 

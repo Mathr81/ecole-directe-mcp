@@ -8,7 +8,11 @@ export function registerGetGrades(server: McpServer, context: ToolContext): void
     'get_grades',
     {
       title: 'Notes',
-      description: "Récupère les notes de l'élève pour une année scolaire donnée.",
+      description:
+        "Récupère les notes de l'élève pour une année scolaire donnée. `value` est null pour une note " +
+        "non chiffrée, dont `status` donne alors le marqueur École Directe (Abs, NE, Disp…). " +
+        "`significant: false` signale une note qui ne compte pas dans la moyenne. `subject` retombe sur " +
+        "le code matière quand École Directe n'en fournit pas le libellé (fréquent sur les années archivées).",
       inputSchema: {
         schoolYear: z.string().optional().describe('Année scolaire, ex: "2025-2026". Par défaut, année courante.'),
       },

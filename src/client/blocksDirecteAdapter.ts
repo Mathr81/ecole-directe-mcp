@@ -7,7 +7,7 @@ import {
   mapCaughtError,
   wrapCall,
 } from './errors.js';
-import { mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
+import { disciplineLabels, mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
 import { fetchDocument } from './download.js';
 import { fetchMessage, fetchMessages } from './messaging.js';
 import type { EcoleDirecteClient, LoginCredentials, Session, TwoFactorChallenge } from './types.js';
@@ -146,7 +146,18 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
       return wrapCall(async () => {
         const client = clientFor(session);
         const marks = assertPresent(await client.marks.getMark(schoolYear), 'getMark');
-        return mapGrades(marks.notes);
+        const labels = disciplineLabels(marks.periodes);
+        // Archived years list only a handful of disciplines in their periods,
+        // leaving most marks with neither libelleMatiere nor a label for their
+        // code. The current year usually knows those codes: one extra call,
+        // only when something is actually missing.
+        if (schoolYear && marks.notes.some((note) => !note.libelleMatiere && !labels.has(note.codeMatiere))) {
+          const current = await client.marks.getMark();
+          for (const [code, label] of disciplineLabels(current?.periodes)) {
+            if (!labels.has(code)) labels.set(code, label);
+          }
+        }
+        return mapGrades(marks.notes, labels);
       });
     },
 
@@ -197,7 +208,11 @@ export function createBlocksDirecteClient(): EcoleDirecteClient {
     async getClassLife(session) {
       return wrapCall(async () => {
         const client = clientFor(session);
-        return mapClassLife(assertPresent(await client.classlife.getClassLife(), 'getClassLife'));
+        const account = (session.accounts as Account[])[0];
+        return mapClassLife(
+          assertPresent(await client.classlife.getClassLife(), 'getClassLife'),
+          account?.profile?.classe?.libelle ?? '',
+        );
       });
     },
 

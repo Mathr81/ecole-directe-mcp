@@ -50,7 +50,12 @@ export interface Grade {
   id: string;
   subject: string;
   label: string;
+  /** Null when the mark has no numeric value — see `status`. */
   value: number | null;
+  /** École Directe's own marker for an ungraded mark ("Abs", "NE", "Disp"…), null for a numeric one. */
+  status: string | null;
+  /** False for a mark the teacher flagged as not counting towards the average. */
+  significant: boolean;
   scale: number;
   date: string;
   coefficient: number;
@@ -70,6 +75,12 @@ export interface TimetableSlot {
   subject: string;
   teacher: string | null;
   room: string | null;
+  /**
+   * Group code for a group course, null for a whole-class one. Several slots
+   * at the same time with the same group are alternatives (one per teacher or
+   * room), not courses the student attends simultaneously.
+   */
+  group: string | null;
   start: string;
   end: string;
   cancelled: boolean;
@@ -92,13 +103,15 @@ export interface ClassLifeComment {
 
 export interface ClassLifeSummary {
   className: string;
-  content: string;
-  updatedAt: string;
+  /** Null when the class has nothing published — École Directe answers `{}`. */
+  content: string | null;
+  updatedAt: string | null;
   comments: ClassLifeComment[];
 }
 
 export interface TimelineEntry {
-  id: string;
+  /** Null for grouped entries ("Nouvelles évaluations"), which École Directe numbers 0. */
+  id: string | null;
   date: string;
   type: string;
   summary: string;

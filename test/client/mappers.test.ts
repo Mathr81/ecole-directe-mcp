@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable, stripHtml } from '../../src/client/mappers.js';
+import { disciplineLabels, mapClassLife, mapGrades, mapHomework, mapSchoolLife, mapTimeline, mapTimetable, stripHtml } from '../../src/client/mappers.js';
 import {
   makeRawAttendanceItem,
   makeRawClassLife,
@@ -22,6 +22,53 @@ describe('mapGrades', () => {
 
     expect(graded).toMatchObject({ id: '1', value: 14.5, scale: 20, coefficient: 1, classAverage: 12.3 });
     expect(absent.value).toBeNull();
+  });
+
+  it("keeps École Directe's own marker for an ungraded mark, such as Abs", () => {
+    const [graded, absent] = mapGrades([
+      makeRawMark({ id: 1, valeur: '14,5' }),
+      makeRawMark({ id: 2, valeur: 'Abs ', valeurisee: false }),
+    ]);
+
+    expect(graded.status).toBeNull();
+    expect(absent).toMatchObject({ value: null, status: 'Abs' });
+  });
+
+  it('keeps the value of a non-significant mark and flags it instead of dropping it', () => {
+    const [mark] = mapGrades([makeRawMark({ valeur: '8', nonSignificatif: true })]);
+
+    expect(mark).toMatchObject({ value: 8, significant: false });
+  });
+
+  it('falls back to the period discipline label when libelleMatiere is empty', () => {
+    // Observed on an archived school year: most marks come back with an empty
+    // libelleMatiere, but codeMatiere is always set and the periods list the
+    // label for each code.
+    const [labelled, fromPeriods, unknown] = mapGrades(
+      [
+        makeRawMark({ id: 1, codeMatiere: 'G-SCI', libelleMatiere: 'ENSEIGN.SCIENTIFIQUE' }),
+        makeRawMark({ id: 2, codeMatiere: 'PH-CH', libelleMatiere: '' }),
+        makeRawMark({ id: 3, codeMatiere: 'ESP2', libelleMatiere: '' }),
+      ],
+      new Map([['PH-CH', 'PHYSIQUE-CHIMIE']]),
+    );
+
+    expect(labelled.subject).toBe('ENSEIGN.SCIENTIFIQUE');
+    expect(fromPeriods.subject).toBe('PHYSIQUE-CHIMIE');
+    expect(unknown.subject).toBe('ESP2');
+  });
+});
+
+describe('disciplineLabels', () => {
+  it('maps each subject code to its label across periods', () => {
+    const labels = disciplineLabels([
+      { ensembleMatieres: { disciplines: [{ codeMatiere: 'PH-CH', discipline: 'PHYSIQUE-CHIMIE' }] } },
+      { ensembleMatieres: { disciplines: [{ codeMatiere: 'MATHS', discipline: 'MATHEMATIQUES' }] } },
+      {},
+    ]);
+
+    expect(labels.get('PH-CH')).toBe('PHYSIQUE-CHIMIE');
+    expect(labels.get('MATHS')).toBe('MATHEMATIQUES');
   });
 });
 
@@ -72,6 +119,26 @@ describe('mapTimetable', () => {
     const [slot] = mapTimetable([makeRawTimetableCourse({ prof: '', salle: 'B12', isAnnule: true })]);
     expect(slot).toMatchObject({ teacher: null, room: 'B12', cancelled: true });
   });
+
+  it('sorts slots chronologically, since École Directe returns them in no particular order', () => {
+    const slots = mapTimetable([
+      makeRawTimetableCourse({ id: 1, start_date: '2026-09-28 11:05' }),
+      makeRawTimetableCourse({ id: 2, start_date: '2026-09-28 13:45' }),
+      makeRawTimetableCourse({ id: 3, start_date: '2026-09-28 07:55' }),
+    ]);
+
+    expect(slots.map((s) => s.id)).toEqual(['3', '1', '2']);
+  });
+
+  it('exposes the group, so parallel slots of one group read as alternatives', () => {
+    const [slot, whole] = mapTimetable([
+      makeRawTimetableCourse({ id: 1, groupeCode: 'TG3ACCPE', classeCode: '' }),
+      makeRawTimetableCourse({ id: 2, start_date: '2099-01-01 08:00', groupeCode: '', classeCode: 'TG3' }),
+    ]);
+
+    expect(slot.group).toBe('TG3ACCPE');
+    expect(whole.group).toBeNull();
+  });
 });
 
 describe('mapSchoolLife', () => {
@@ -113,9 +180,11 @@ describe('mapClassLife', () => {
   it('returns an empty summary when École Directe has nothing for the class', () => {
     // Observed against a real account: the endpoint answers `{}` — not an
     // error, just no class-life content.
-    const summary = mapClassLife({} as Parameters<typeof mapClassLife>[0]);
+    const summary = mapClassLife({} as Parameters<typeof mapClassLife>[0], 'Terminale G3');
 
-    expect(summary).toEqual({ className: '', content: '', updatedAt: '', comments: [] });
+    // Nulls, not empty strings, so "nothing published" cannot pass for a
+    // parsing failure; the class name comes from the account instead.
+    expect(summary).toEqual({ className: 'Terminale G3', content: null, updatedAt: null, comments: [] });
   });
 });
 
@@ -123,5 +192,15 @@ describe('mapTimeline', () => {
   it('joins titre and soustitre into a summary', () => {
     const [entry] = mapTimeline([makeRawPersonalTimelineItem({ titre: 'Nouvelle note', soustitre: 'Maths' })]);
     expect(entry.summary).toBe('Nouvelle note — Maths');
+  });
+
+  it('reports no id for grouped entries, which École Directe numbers 0', () => {
+    const [grouped, single] = mapTimeline([
+      makeRawPersonalTimelineItem({ idElement: 0, titre: 'Nouvelles évaluations' }),
+      makeRawPersonalTimelineItem({ idElement: 77 }),
+    ]);
+
+    expect(grouped.id).toBeNull();
+    expect(single.id).toBe('77');
   });
 });

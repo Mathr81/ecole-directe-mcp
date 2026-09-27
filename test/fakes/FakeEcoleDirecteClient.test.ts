@@ -5,7 +5,7 @@ describe('FakeEcoleDirecteClient', () => {
   it('returns configured fixtures and counts calls', async () => {
     const fake = new FakeEcoleDirecteClient();
     fake.grades = [
-      { id: '1', subject: 'Maths', label: 'DS', value: 15, scale: 20, date: '2026-01-01', coefficient: 1, classAverage: 10 },
+      { id: '1', subject: 'Maths', label: 'DS', value: 15, scale: 20, date: '2026-01-01', coefficient: 1, classAverage: 10, status: null, significant: true },
     ];
     const session = makeSession();
 

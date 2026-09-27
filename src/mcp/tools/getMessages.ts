@@ -9,7 +9,7 @@ export function registerGetMessages(server: McpServer, context: ToolContext): vo
     {
       title: 'Messagerie — liste',
       description:
-        "Liste les messages de la messagerie École Directe. Ne renvoie que les en-têtes : le corps d'un message s'obtient avec `read_message`.",
+        "Liste les messages de la messagerie École Directe, du plus récent au plus ancien. Ne renvoie que les en-têtes : le corps d'un message s'obtient avec `read_message`.",
       inputSchema: {
         folder: z
           .enum(['received', 'sent', 'draft', 'archived'])

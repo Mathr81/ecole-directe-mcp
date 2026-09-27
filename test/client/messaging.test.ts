@@ -164,7 +164,42 @@ describe('fetchMessages', () => {
 
     const messages = await fetchMessages(makeSession(), 'received', 2);
 
-    expect(messages.map((m) => m.id)).toEqual(['1', '2']);
+    expect(messages).toHaveLength(2);
+  });
+
+  it('asks École Directe for the folder, newest first, sized to the limit', async () => {
+    // Without these parameters the API answers with a first page of 20
+    // messages, oldest first — observed with 40 received messages, of which
+    // the newest 20 were simply unreachable.
+    const calls = stubFetch({ code: 200, data: { messages: { sent: [] } } });
+
+    await fetchMessages(makeSession(), 'sent', 50);
+
+    const params = calls[0].searchParams;
+    expect(params.get('typeRecuperation')).toBe('sent');
+    expect(params.get('orderBy')).toBe('date');
+    expect(params.get('order')).toBe('desc');
+    expect(params.get('page')).toBe('0');
+    expect(params.get('itemsPerPage')).toBe('50');
+  });
+
+  it('returns the newest messages first even if the API ignores the ordering', async () => {
+    stubFetch({
+      code: 200,
+      data: {
+        messages: {
+          received: [
+            makeRawMessage({ id: 1, date: '2026-08-31 12:00:00' }),
+            makeRawMessage({ id: 3, date: '2026-09-24 11:00:35' }),
+            makeRawMessage({ id: 2, date: '2026-09-09 09:58:34' }),
+          ],
+        },
+      },
+    });
+
+    const messages = await fetchMessages(makeSession(), 'received', 2);
+
+    expect(messages.map((m) => m.id)).toEqual(['3', '2']);
   });
 
   it('sends the account id and the session token', async () => {

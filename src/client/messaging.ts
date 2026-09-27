@@ -153,18 +153,32 @@ export async function fetchMessages(
   folder: MessageFolder,
   limit: number,
 ): Promise<MessageSummary[]> {
-  const data = (await post(
-    session,
-    `/v3/eleves/${session.accountId}/messages.awp?verbe=get&mode=destinataire`,
-    {},
-  )) as { messages?: Partial<Record<MessageFolder, RawMessage[]>> } | undefined;
+  // Without typeRecuperation/order/itemsPerPage the API answers with a first
+  // page of 20 messages, oldest first: with 40 received, the newest 20 were
+  // unreachable. `limit` is capped by the tool, so one page is enough.
+  const query = new URLSearchParams({
+    verbe: 'get',
+    mode: 'destinataire',
+    typeRecuperation: folder,
+    orderBy: 'date',
+    order: 'desc',
+    page: '0',
+    itemsPerPage: String(limit),
+    getAll: '0',
+  });
+  const data = (await post(session, `/v3/eleves/${session.accountId}/messages.awp?${query}`, {})) as { messages?: Partial<Record<MessageFolder, RawMessage[]>> } | undefined;
   const raw = data?.messages?.[folder];
   if (!Array.isArray(raw)) {
     throw new PossiblyExpiredSessionError(
       `École Directe n'a renvoyé aucune liste de messages pour le dossier « ${folder} » — session probablement expirée.`,
     );
   }
-  return raw.slice(0, limit).map((message) => mapMessageSummary(message, folder));
+  // Sorted here too, rather than trusting `order=desc` alone: "AAAA-MM-JJ
+  // HH:MM:SS" sorts lexically in chronological order.
+  return [...raw]
+    .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+    .slice(0, limit)
+    .map((message) => mapMessageSummary(message, folder));
 }
 
 export async function fetchMessage(session: Session, messageId: string): Promise<MessageDetail> {

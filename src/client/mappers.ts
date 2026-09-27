@@ -47,17 +47,43 @@ export function stripHtml(html: string): string {
   );
 }
 
-export function mapGrades(notes: RawMark[]): Grade[] {
-  return notes.map((note) => ({
-    id: String(note.id),
-    subject: note.libelleMatiere,
-    label: note.devoir,
-    value: note.valeurisee && !note.nonSignificatif ? parseFrenchNumber(note.valeur) : null,
-    scale: parseFrenchNumber(note.noteSur) ?? 20,
-    date: note.date,
-    coefficient: parseFrenchNumber(note.coef) ?? 1,
-    classAverage: parseFrenchNumber(note.moyenneClasse),
-  }));
+interface RawPeriodDisciplines {
+  ensembleMatieres?: { disciplines?: Array<{ codeMatiere?: string; discipline?: string }> };
+}
+
+/**
+ * Subject code → label, gathered from every period of a grades response. On
+ * archived school years most marks come back with an empty `libelleMatiere`,
+ * but `codeMatiere` is always set and the periods still list each label.
+ */
+export function disciplineLabels(periods: RawPeriodDisciplines[] | undefined): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const period of periods ?? []) {
+    for (const entry of period.ensembleMatieres?.disciplines ?? []) {
+      if (entry.codeMatiere && entry.discipline && !labels.has(entry.codeMatiere)) {
+        labels.set(entry.codeMatiere, entry.discipline);
+      }
+    }
+  }
+  return labels;
+}
+
+export function mapGrades(notes: RawMark[], labels: Map<string, string> = new Map()): Grade[] {
+  return notes.map((note) => {
+    const value = note.valeurisee ? parseFrenchNumber(note.valeur) : null;
+    return {
+      id: String(note.id),
+      subject: note.libelleMatiere || labels.get(note.codeMatiere) || note.codeMatiere,
+      label: note.devoir,
+      value,
+      status: value === null ? note.valeur?.trim() || null : null,
+      significant: !note.nonSignificatif,
+      scale: parseFrenchNumber(note.noteSur) ?? 20,
+      date: note.date,
+      coefficient: parseFrenchNumber(note.coef) ?? 1,
+      classAverage: parseFrenchNumber(note.moyenneClasse),
+    };
+  });
 }
 
 export function mapHomework(perDate: Array<{ date: string; response: RawHomeworkDate }>): HomeworkItem[] {
@@ -78,15 +104,20 @@ export function mapHomework(perDate: Array<{ date: string; response: RawHomework
 }
 
 export function mapTimetable(courses: TimetableCourse[]): TimetableSlot[] {
-  return courses.map((course) => ({
-    id: String(course.id),
-    subject: course.matiere,
-    teacher: course.prof || null,
-    room: course.salle || null,
-    start: course.start_date,
-    end: course.end_date,
-    cancelled: course.isAnnule,
-  }));
+  return courses
+    .map((course) => ({
+      id: String(course.id),
+      subject: course.matiere,
+      teacher: course.prof || null,
+      room: course.salle || null,
+      group: course.groupeCode || null,
+      start: course.start_date,
+      end: course.end_date,
+      cancelled: course.isAnnule,
+    }))
+    // "AAAA-MM-JJ HH:MM" sorts lexically in chronological order; École Directe
+    // returns the slots in no particular order.
+    .sort((a, b) => a.start.localeCompare(b.start));
 }
 
 /**
@@ -126,11 +157,11 @@ export function mapSchoolLife(schoolLife: RawSchoolLife): SchoolLifeEntry[] {
   return [...attendance, ...exemptions, ...conduct];
 }
 
-export function mapClassLife(classLife: RawClassLife): ClassLifeSummary {
+export function mapClassLife(classLife: RawClassLife, accountClassName = ''): ClassLifeSummary {
   return {
-    className: classLife.classe ?? '',
-    content: classLife.contenu ?? '',
-    updatedAt: classLife.matieres?.dateMiseAJour ?? '',
+    className: classLife.classe || accountClassName,
+    content: classLife.contenu || null,
+    updatedAt: classLife.matieres?.dateMiseAJour || null,
     comments: asArray(classLife.commentaires).map((comment) => ({
       id: String(comment.id),
       author: comment.auteur,
@@ -142,7 +173,7 @@ export function mapClassLife(classLife: RawClassLife): ClassLifeSummary {
 
 export function mapTimeline(items: RawPersonalTimelineItem[]): TimelineEntry[] {
   return items.map((item) => ({
-    id: String(item.idElement),
+    id: item.idElement ? String(item.idElement) : null,
     date: item.date,
     type: item.typeElement,
     summary: item.soustitre ? `${item.titre} — ${item.soustitre}` : item.titre,
