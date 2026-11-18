@@ -13,6 +13,7 @@ import {
 import { disciplineLabels, mapClassLife, mapGrades, mapPeriods, mapHomework, mapSchoolLife, mapTimeline, mapTimetable } from './mappers.js';
 import { fetchDocument } from './download.js';
 import { fetchDocuments } from './documents.js';
+import { fetchWorkspaceFiles, fetchWorkspaces } from './workspaces.js';
 import { computeAverages } from './averages.js';
 import {
   fetchClassLife,
@@ -176,8 +177,16 @@ export function createEcoleDirecteClient(): EcoleDirecteClient {
       return wrapCall(() => fetchDocuments(session, schoolYear));
     },
 
-    async downloadDocument(session, fileId, fileType, destinationDir, schoolYear) {
-      return wrapCall(() => fetchDocument(session, fileId, fileType, destinationDir, schoolYear));
+    async downloadDocument(session, fileId, fileType, destinationDir, schoolYear, workspaceId) {
+      return wrapCall(() => fetchDocument(session, fileId, fileType, destinationDir, schoolYear, workspaceId));
+    },
+
+    async getWorkspaces(session) {
+      return wrapCall(() => fetchWorkspaces(session));
+    },
+
+    async getWorkspaceFiles(session, workspaceId, folder) {
+      return wrapCall(() => fetchWorkspaceFiles(session, workspaceId, folder));
     },
 
     async getAuthStatus(session) {

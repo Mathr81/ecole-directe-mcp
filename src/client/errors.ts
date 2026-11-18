@@ -195,8 +195,11 @@ export function withAutoRefresh(
     getMessages: (session, folder, limit) => withRetry(session, (s) => client.getMessages(s, folder, limit)),
     getMessage: (session, messageId) => withRetry(session, (s) => client.getMessage(s, messageId)),
     getDocuments: (session, schoolYear) => withRetry(session, (s) => client.getDocuments(s, schoolYear)),
-    downloadDocument: (session, fileId, fileType, destinationDir, schoolYear) =>
-      withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir, schoolYear)),
+    downloadDocument: (session, fileId, fileType, destinationDir, schoolYear, workspaceId) =>
+      withRetry(session, (s) => client.downloadDocument(s, fileId, fileType, destinationDir, schoolYear, workspaceId)),
+    getWorkspaces: (session) => withRetry(session, (s) => client.getWorkspaces(s)),
+    getWorkspaceFiles: (session, workspaceId, folder) =>
+      withRetry(session, (s) => client.getWorkspaceFiles(s, workspaceId, folder)),
     // getAuthStatus never touches the network (Task 6's adapter only reads
     // local session fields for it), so it can never throw a retriable error.
     // Wrapping it in withRetry would only add a pointless proactive-refresh

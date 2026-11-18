@@ -22,15 +22,21 @@ export function registerDownloadDocument(server: McpServer, context: ToolContext
           .string()
           .describe(
             'Type de fichier École Directe : "PIECE_JOINTE" (pièce jointe d\'un message), ' +
-              '"FICHIER_CDT" (cahier de textes), "CLOUD" (fichier du cloud), ou le `fileType` donné ' +
+              '"FICHIER_CDT" (cahier de textes), "CLOUD" (fichier du cloud ou d\'un espace de travail), ou le `fileType` donné ' +
               'par `get_documents` pour un bulletin ou un document administratif.',
           ),
         schoolYear: schoolYear.describe(
           "Année scolaire d'un document archivé, telle que donnée par `get_documents` (ex: \"2025-2026\").",
         ),
+        workspaceId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Pour un fichier d'espace de travail : l'`id` de l'espace (requis, sinon École Directe refuse)."),
       },
     },
-    async ({ fileId, fileType, schoolYear: year }) =>
+    async ({ fileId, fileType, schoolYear: year, workspaceId }) =>
       runTool(context.sessionBox, async (session) => {
         const { path, ...file } = await context.client.downloadDocument(
           session,
@@ -38,6 +44,7 @@ export function registerDownloadDocument(server: McpServer, context: ToolContext
           fileType,
           context.config.downloadDir,
           year,
+          workspaceId,
         );
         const extracted = await extractText(path, file.mimeType);
         const text = {

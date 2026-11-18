@@ -160,6 +160,29 @@ describe('get_documents tool', () => {
   });
 });
 
+describe('workspace tools', () => {
+  it('lists a workspace folder and downloads its files with the workspace id', async () => {
+    const fake = new FakeEcoleDirecteClient();
+    fake.workspaceEntries = [
+      { type: 'file', name: 'Cours.pdf', fileId: '\\\\CLOUD07\\cloud\\R\\W\\789\\Cours.pdf', parent: '', date: null, sizeBytes: 1 },
+    ];
+    fake.downloadResult = { path: '/downloads/Cours.pdf', filename: 'Cours.pdf', mimeType: 'image/png', sizeBytes: 1 };
+    const session = makeSession();
+    const mcpClient = await connect({ client: fake, sessionBox: { get: () => session, set: async () => {} }, config: loadConfig({}) });
+
+    const listed = await mcpClient.callTool({ name: 'get_workspace_files', arguments: { workspaceId: 789, folder: '\\METHODOLOGIE' } });
+    await mcpClient.callTool({
+      name: 'download_document',
+      arguments: { fileId: fake.workspaceEntries[0].type === 'file' ? fake.workspaceEntries[0].fileId : '', fileType: 'CLOUD', workspaceId: 789 },
+    });
+
+    expect(JSON.parse(textOf(listed as { content: unknown }))).toEqual(fake.workspaceEntries);
+    expect(fake.lastArgs.getWorkspaceFiles).toEqual([789, '\\METHODOLOGIE']);
+    expect(fake.lastArgs.downloadDocument?.[1]).toBe('CLOUD');
+    expect(fake.lastArgs.downloadDocument?.[4]).toBe(789);
+  });
+});
+
 describe('date range validation', () => {
   // A malformed date used to come back as `[]`, which an LLM reads as "no
   // homework" rather than "you called me wrong".

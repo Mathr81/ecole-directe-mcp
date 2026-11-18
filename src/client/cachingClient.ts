@@ -83,8 +83,13 @@ export function createCachingClient(
       cached(`message:${session.username}:${messageId}`, () => client.getMessage(session, messageId)),
     getDocuments: (session, schoolYear) =>
       cached(`documents:${session.username}:${schoolYear ?? ''}`, () => client.getDocuments(session, schoolYear)),
-    downloadDocument: (session, fileId, fileType, destinationDir, schoolYear) =>
-      enqueue(() => client.downloadDocument(session, fileId, fileType, destinationDir, schoolYear)),
+    downloadDocument: (session, fileId, fileType, destinationDir, schoolYear, workspaceId) =>
+      enqueue(() => client.downloadDocument(session, fileId, fileType, destinationDir, schoolYear, workspaceId)),
+    getWorkspaces: (session) => cached(`workspaces:${session.username}`, () => client.getWorkspaces(session)),
+    getWorkspaceFiles: (session, workspaceId, folder) =>
+      cached(`workspaceFiles:${session.username}:${workspaceId}:${folder ?? ''}`, () =>
+        client.getWorkspaceFiles(session, workspaceId, folder),
+      ),
     getAuthStatus: (session) => enqueue(() => client.getAuthStatus(session)),
   };
 }

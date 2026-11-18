@@ -17,6 +17,7 @@ import { registerMarkHomeworkDone } from './tools/markHomeworkDone.js';
 import { registerDownloadDocument } from './tools/downloadDocument.js';
 import { registerGetMessages } from './tools/getMessages.js';
 import { registerReadMessage } from './tools/readMessage.js';
+import { registerGetWorkspaceFiles, registerGetWorkspaces } from './tools/getWorkspaces.js';
 
 export interface ToolContext {
   client: EcoleDirecteClient;
@@ -50,5 +51,7 @@ export function buildServer(context: ToolContext): McpServer {
   registerDownloadDocument(server, context);
   registerGetMessages(server, context);
   registerReadMessage(server, context);
+  registerGetWorkspaces(server, context);
+  registerGetWorkspaceFiles(server, context);
   return server;
 }

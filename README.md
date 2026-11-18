@@ -40,6 +40,8 @@ explicite au lieu de faire tomber le serveur.
 | `get_messages` | Liste les messages d'un dossier (en-têtes seulement) |
 | `read_message` | Contenu d'un message, HTML retiré, avec ses pièces jointes |
 | `get_documents` | Bulletins, certificats et autres documents, années archivées comprises |
+| `get_workspaces` | Espaces de travail (espaces de classe) visibles par l'élève |
+| `get_workspace_files` | Dossiers et fichiers du cloud d'un espace de travail (cours, fiches…) ; à télécharger avec `download_document`, `fileType` = `CLOUD` et `workspaceId` |
 | `download_document` | Télécharge un document dans `DOWNLOAD_DIR`, sous son vrai nom, et renvoie son texte (PDF, DOCX, TXT, HTML) ; plus son chemin en local, ou un lien temporaire en HTTP |
 
 La messagerie est en deux outils parce que l'API l'impose : la liste

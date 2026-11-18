@@ -16,6 +16,8 @@ import type {
   TimelineEntry,
   TimetableSlot,
   TwoFactorChallenge,
+  Workspace,
+  WorkspaceEntry,
 } from '../../src/client/types.js';
 
 export function makeSession(overrides: Partial<Session> = {}): Session {
@@ -65,6 +67,8 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
     content: 'Bonjour',
     attachments: [],
   };
+  workspaces: Workspace[] = [];
+  workspaceEntries: WorkspaceEntry[] = [];
   downloadResult: DownloadResult = { path: '', filename: '', mimeType: '', sizeBytes: 0 };
   callDelayMs = 0;
 
@@ -163,9 +167,19 @@ export class FakeEcoleDirecteClient implements EcoleDirecteClient {
     fileType: string,
     destinationDir: string,
     schoolYear?: string,
+    workspaceId?: number,
   ): Promise<DownloadResult> {
-    this.lastArgs.downloadDocument = [fileId, fileType, destinationDir, schoolYear];
+    this.lastArgs.downloadDocument = [fileId, fileType, destinationDir, schoolYear, workspaceId];
     return this.record('downloadDocument', () => this.downloadResult);
+  }
+
+  getWorkspaces(_session: Session): Promise<Workspace[]> {
+    return this.record('getWorkspaces', () => this.workspaces);
+  }
+
+  getWorkspaceFiles(_session: Session, workspaceId: number, folder?: string): Promise<WorkspaceEntry[]> {
+    this.lastArgs.getWorkspaceFiles = [workspaceId, folder];
+    return this.record('getWorkspaceFiles', () => this.workspaceEntries);
   }
 
   getAuthStatus(session: Session | null): Promise<AuthStatus> {

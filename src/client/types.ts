@@ -239,6 +239,39 @@ export interface MessageDetail extends MessageSummary {
   attachments: Array<{ id: string; filename: string; type: string }>;
 }
 
+export interface Workspace {
+  /** Pass as `workspaceId` to get_workspace_files and download_document. */
+  id: number;
+  title: string;
+  summary: string;
+  /** Whether the student has joined it; non-members may still see public ones. */
+  member: boolean;
+  hasFiles: boolean;
+  createdBy: string;
+}
+
+export type WorkspaceEntry =
+  | {
+      type: 'folder';
+      name: string;
+      /** Path relative to the workspace root; pass as `folder` to list it. */
+      folder: string;
+      parent: string;
+      date: string | null;
+      sizeBytes: number;
+      /** False when its contents were not returned: list it with `folder`. */
+      contentsListed: boolean;
+    }
+  | {
+      type: 'file';
+      name: string;
+      /** Pass as `fileId` (with fileType "CLOUD" and the workspaceId) to download_document. */
+      fileId: string;
+      parent: string;
+      date: string | null;
+      sizeBytes: number;
+    };
+
 export interface DownloadResult {
   path: string;
   filename: string;
@@ -278,6 +311,9 @@ export interface EcoleDirecteClient {
     fileType: string,
     destinationDir: string,
     schoolYear?: string,
+    workspaceId?: number,
   ): Promise<DownloadResult>;
+  getWorkspaces(session: Session): Promise<Workspace[]>;
+  getWorkspaceFiles(session: Session, workspaceId: number, folder?: string): Promise<WorkspaceEntry[]>;
   getAuthStatus(session: Session | null): Promise<AuthStatus>;
 }

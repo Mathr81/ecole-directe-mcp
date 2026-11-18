@@ -97,6 +97,7 @@ export async function fetchDocument(
   fileType: string,
   destinationDir: string,
   schoolYear?: string,
+  workspaceId?: number,
 ): Promise<DownloadResult> {
   const url = new URL(`${BASE_URL}/v3/telechargement.awp`);
   url.searchParams.set('verbe', 'get');
@@ -112,7 +113,11 @@ export async function fetchDocument(
 
   const response = await fetch(url, {
     method: 'POST',
-    body: new URLSearchParams({ data: JSON.stringify({ forceDownload: 0 }) }).toString(),
+    // A workspace cloud file answers X-Code 403 ("Accès non autorisé") unless
+    // the body names its workspace — the web app sends the same fields.
+    body: new URLSearchParams({
+      data: JSON.stringify({ forceDownload: 0, ...(workspaceId ? { idEntity: workspaceId, typeEntity: 'W' } : {}) }),
+    }).toString(),
     headers: {
       'Content-Type': 'x-www-form-urlencoded',
       'User-Agent': USER_AGENT,
