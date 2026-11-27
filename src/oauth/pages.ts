@@ -72,11 +72,19 @@ export interface LoginPageOptions {
   pendingId: string;
   /** As the client registered itself — untrusted. */
   clientName: string;
+  /** Host the authorization code is sent to — the one thing a fake client cannot disguise. */
+  redirectHost: string;
   action: string;
   error?: string;
 }
 
-export function renderLoginPage({ pendingId, clientName, action, error }: LoginPageOptions): string {
+/** Hosts of the AI apps this server is known to be used with. */
+const KNOWN_REDIRECT_HOSTS = ['claude.ai', 'claude.com'];
+
+export function renderLoginPage({ pendingId, clientName, redirectHost, action, error }: LoginPageOptions): string {
+  const warning = KNOWN_REDIRECT_HOSTS.includes(redirectHost)
+    ? ''
+    : `<p class="error">Attention : ce n'est pas Claude. Ne te connecte que si tu as toi-même ajouté ce connecteur dans ton IA.</p>`;
   return renderShell(
     'Connexion',
     `<h1>Connexion à École Directe</h1>
@@ -85,6 +93,8 @@ export function renderLoginPage({ pendingId, clientName, action, error }: LoginP
     <li>Notes, devoirs, emploi du temps, vie scolaire</li>
     <li>Messagerie : lecture seule</li>
   </ul>
+  <p>Après la connexion, tu seras renvoyé vers <strong>${escapeHtml(redirectHost)}</strong>.</p>
+  ${warning}
   ${errorBlock(error)}
   <form method="post" action="${escapeHtml(action)}">
     <input type="hidden" name="pending" value="${escapeHtml(pendingId)}">

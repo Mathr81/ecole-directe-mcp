@@ -23,7 +23,6 @@ import { InvalidGrantError, InvalidTokenError } from '@modelcontextprotocol/sdk/
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidCredentialsError, InvalidTwoFactorAnswerError } from '../client/errors.js';
 import type { LoginCredentials, Session, TwoFactorChallenge } from '../client/types.js';
-import type { UserRecord } from '../store/userStore.js';
 import { RateLimiter } from '../transport/rateLimiter.js';
 import type { MultiUser } from '../users/multiUser.js';
 import { renderLoginPage, renderMessagePage, renderTwoFactorPage } from './pages.js';
@@ -140,7 +139,13 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
     this.send(
       res,
       status,
-      renderLoginPage({ pendingId, clientName: entry?.clientName ?? 'Un client MCP', action: LOGIN_PATH, error }),
+      renderLoginPage({
+        pendingId,
+        clientName: entry?.clientName ?? 'Un client MCP',
+        redirectHost: entry ? new URL(entry.redirectUri).hostname : '',
+        action: LOGIN_PATH,
+        error,
+      }),
     );
   }
 
@@ -223,7 +228,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
       );
       return;
     }
-    await this.onAuthenticated(res, input.pending, entry, result, existing);
+    await this.onAuthenticated(res, input.pending, entry, result);
   }
 
   /** Step 2b: the QCM answer. */
@@ -259,8 +264,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
       this.renderMessage(res, 502, 'Question de sécurité', ED_DOWN);
       return;
     }
-    const existing = await this.options.multiUser.users.findByUsername(credentials.username);
-    await this.onAuthenticated(res, input.pending, entry, session, existing);
+    await this.onAuthenticated(res, input.pending, entry, session);
   }
 
   /** École Directe said yes: decide between a code, a pending page and a refusal. */
@@ -269,7 +273,6 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
     pendingId: string,
     entry: PendingAuthorization,
     session: Session,
-    existing: UserRecord | null,
   ): Promise<void> {
     this.pending.delete(pendingId);
     const { users, runtimes, notify, ownerUsername } = this.options.multiUser;
@@ -280,6 +283,9 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
     }
 
     const userId = users.idFor(session.username);
+    // Read now, not before the École Directe call: an approval or a revocation
+    // made meanwhile from /admin must not be overwritten by a stale copy.
+    const existing = await users.get(userId);
     const at = new Date(this.now()).toISOString();
     const fresh = { displayName: session.displayName, accountKind: session.accountKind, deviceUUID: session.deviceUUID, session };
 

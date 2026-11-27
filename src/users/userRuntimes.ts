@@ -59,13 +59,18 @@ export class UserRuntimes {
     const record = await users.get(userId);
     if (!record || record.status !== 'approved' || !record.session) return null;
 
+    // Assigned below; the persist callback only runs later, on a refresh.
+    let self: UserRuntime | undefined;
     const sessionBox = createSessionBox(record.session, async (session: Session) => {
       const current = await users.get(userId);
-      if (current) await users.save({ ...current, session });
+      // Revoked meanwhile, or replaced by a newer runtime after a web login: keep out.
+      if (!current || current.status !== 'approved' || (await this.runtimes.get(userId)) !== self) return;
+      await users.save({ ...current, session });
       if (record.isOwner && ownerSessionMirrorPath) await writeSession(session, ownerSessionMirrorPath);
     });
     const client = this.withAuthLost(userId, createClient(base, sessionBox, { sessionMaxAgeMs }));
-    return { userId, isOwner: record.isOwner, sessionBox, client };
+    self = { userId, isOwner: record.isOwner, sessionBox, client };
+    return self;
   }
 
   private withAuthLost(userId: string, client: EcoleDirecteClient): EcoleDirecteClient {

@@ -8,6 +8,8 @@ export const TEST_ENCRYPTION_KEY = '11'.repeat(32);
 /** A fake whose sessions and grades depend on who logged in, to prove users stay apart. */
 export class PerUserFake extends FakeEcoleDirecteClient {
   accountKindFor?: (username: string) => string;
+  /** Runs while École Directe is "answering" a login, to simulate a concurrent admin action. */
+  duringLogin?: () => Promise<void>;
 
   sessionFor(username: string): Session {
     return makeSession({
@@ -23,6 +25,7 @@ export class PerUserFake extends FakeEcoleDirecteClient {
 
   override async login(credentials: LoginCredentials): Promise<Session | TwoFactorChallenge> {
     const result = await super.login(credentials);
+    await this.duringLogin?.();
     return 'accessToken' in result ? { ...this.sessionFor(credentials.username), deviceUUID: credentials.deviceUUID } : result;
   }
 

@@ -373,6 +373,40 @@ describe('OAuth refresh', () => {
 });
 
 describe('multi-user login', () => {
+  it('the login page names where the code will go, and warns when it is not Claude', async () => {
+    const { port } = await start();
+    const page = await request(port, `/authorize?${new URLSearchParams({
+      client_id: await registerClient(port),
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      code_challenge: pkce().challenge,
+      code_challenge_method: 'S256',
+    })}`);
+    expect(page.body).toContain('renvoyé vers <strong>claude.ai</strong>');
+    expect(page.body).not.toContain("ce n'est pas Claude");
+
+    const evil = await request(port, '/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'Claude',
+        redirect_uris: ['https://evil.example/cb'],
+        grant_types: ['authorization_code'],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+      }),
+    });
+    const phishing = await request(port, `/authorize?${new URLSearchParams({
+      client_id: evil.json<{ client_id: string }>().client_id,
+      response_type: 'code',
+      redirect_uri: 'https://evil.example/cb',
+      code_challenge: pkce().challenge,
+      code_challenge_method: 'S256',
+    })}`);
+    expect(phishing.body).toContain('renvoyé vers <strong>evil.example</strong>');
+    expect(phishing.body).toContain("ce n'est pas Claude");
+  });
+
   it('a new user gets a pending page, no code, and a webhook', async () => {
     const { port } = await start();
     const clientId = await registerClient(port);
@@ -426,6 +460,31 @@ describe('multi-user login', () => {
     expect((await multiUser.oauthStore.findAccessToken(second))!.userId).toBe(id);
     expect((await multiUser.users.list()).filter((u) => u.userId === id)).toHaveLength(1);
     expect(forget).toHaveBeenCalledWith(id);
+  });
+
+  it('a revocation during the École Directe login is not undone', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+    await approve('ami');
+    fake.duringLogin = () => multiUser.removeUser(multiUser.users.idFor('ami'));
+
+    const login = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+
+    expect(login.headers.location).toBeUndefined();
+    expect((await multiUser.users.findByUsername('ami'))?.status ?? null).not.toBe('approved');
+  });
+
+  it('an approval during the École Directe login is not undone', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+    fake.duringLogin = () => approve('ami');
+
+    const login = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+
+    expect(login.status).toBe(302);
+    expect((await multiUser.users.findByUsername('ami'))!.status).toBe('approved');
   });
 
   it('a non-student account is refused before any record or webhook', async () => {

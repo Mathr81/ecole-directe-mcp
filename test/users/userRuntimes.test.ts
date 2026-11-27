@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TokenExpiredError } from '../../src/client/errors.js';
+import { SchoolUnavailableError, TokenExpiredError } from '../../src/client/errors.js';
 import type { Grade, Session } from '../../src/client/types.js';
 import { deriveKeys } from '../../src/store/secretBox.js';
 import { readSession } from '../../src/store/sessionStore.js';
@@ -126,5 +126,39 @@ describe('UserRuntimes', () => {
     await expect(a.client.getGrades(a.sessionBox.get()!)).rejects.toThrow(/reconnecte le connecteur/);
     expect(onAuthLost).toHaveBeenCalledWith(id);
     expect(await rt.get(id)).not.toBe(a);
+  });
+});
+
+describe('UserRuntimes and concurrent changes', () => {
+  it('a refresh from a forgotten runtime neither resurrects nor overwrites the record', async () => {
+    await users.save(record('a'));
+    const rt = runtimes();
+    const id = users.idFor('a');
+    const old = (await rt.get(id))!;
+    // A web login saved a newer session and dropped the cached runtime.
+    await users.save({ ...record('a'), session: makeSession({ username: 'a', token: 'web' }) });
+    rt.forget(id);
+    fake.refreshedSession = makeSession({ username: 'a', token: 'stale-refresh' });
+    fake.queueFailure('getGrades', new TokenExpiredError(525, 'expiré'));
+    await old.client.getGrades(old.sessionBox.get()!);
+    expect((await users.get(id))!.session!.token).toBe('web');
+
+    await users.delete(id);
+    fake.queueFailure('getGrades', new TokenExpiredError(525, 'expiré'));
+    await old.client.getGrades(old.sessionBox.get()!);
+    expect(await users.get(id)).toBeNull();
+  });
+});
+
+describe('UserRuntimes and outages', () => {
+  it('an École Directe outage during refresh does not call onAuthLost', async () => {
+    await users.save(record('a'));
+    const rt = runtimes();
+    const a = (await rt.get(users.idFor('a')))!;
+    fake.queueFailure('getGrades', new TokenExpiredError(525, 'expiré'));
+    fake.queueFailure('refreshSession', new SchoolUnavailableError(535, 'maintenance'));
+
+    await expect(a.client.getGrades(a.sessionBox.get()!)).rejects.toBeInstanceOf(SchoolUnavailableError);
+    expect(onAuthLost).not.toHaveBeenCalled();
   });
 });
