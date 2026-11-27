@@ -4,6 +4,7 @@ import type { ToolContext } from '../server.js';
 import { runTool } from '../runTool.js';
 import { schoolYear } from '../schoolYear.js';
 import { extractText } from '../../client/extractText.js';
+import { DEFAULT_DOWNLOAD_LINK_TTL_MS, purgeOldFiles } from '../../transport/downloadLinks.js';
 
 export function registerDownloadDocument(server: McpServer, context: ToolContext): void {
   server.registerTool(
@@ -38,6 +39,8 @@ export function registerDownloadDocument(server: McpServer, context: ToolContext
     },
     async ({ fileId, fileType, schoolYear: year, workspaceId }) =>
       runTool(context.sessionBox, async (session) => {
+        // Remote: files only live as long as their links, or the disk fills up.
+        if (context.downloadLinks) await purgeOldFiles(context.config.downloadDir, DEFAULT_DOWNLOAD_LINK_TTL_MS);
         const { path, ...file } = await context.client.downloadDocument(
           session,
           fileId,

@@ -14,6 +14,7 @@
  * be, or the server refuses to start.
  */
 import type { Server } from 'node:http';
+import { join } from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
@@ -23,6 +24,7 @@ import { EcoleDirecteOAuthProvider, LOGIN_PATH, SUPPORTED_SCOPES, TWO_FACTOR_PAT
 import { MISSING_KEY_MESSAGE, type MultiUser } from '../users/multiUser.js';
 import { isAuthorized } from './httpAuth.js';
 import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { HealthState, SessionMonitor } from '../health/sessionMonitor.js';
 
 export const MCP_PATH = '/mcp';
@@ -128,6 +130,7 @@ export async function startHttpServer(
   });
 
   let oauthGuard: ReturnType<typeof requireBearerAuth> | undefined;
+  let resourceMetadataUrl = '';
 
   if (oauth.enabled && options.multiUser) {
     const resourceUrl = new URL(oauth.publicUrl);
@@ -169,11 +172,12 @@ export async function startHttpServer(
       }),
     );
 
+    resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceUrl);
     oauthGuard = requireBearerAuth({
       verifier: provider,
       // Points Claude at the protected resource metadata from the 401, which
       // is the handshake that tells it where the authorization server is.
-      resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceUrl),
+      resourceMetadataUrl,
     });
   }
 
@@ -181,6 +185,7 @@ export async function startHttpServer(
     // The fixed token short-circuits; anything else falls through to OAuth so
     // Claude still receives a spec-shaped 401 with WWW-Authenticate.
     if (authToken && isAuthorized(req.headers.authorization, authToken)) {
+      res.locals.fixedToken = true;
       next();
       return;
     }
@@ -196,8 +201,40 @@ export async function startHttpServer(
   // `host:0` entry would reject every request.
   let allowedHosts = context.config.http.allowedHosts;
 
+  /**
+   * Multi-user: the context of the user the credential belongs to. The fixed
+   * token and tokens issued before multi-user mode (no userId) are the owner's.
+   */
+  async function userContext(req: Request, res: Response): Promise<ToolContext | null> {
+    const multiUser = options.multiUser as MultiUser;
+    const tokenUserId = (req as Request & { auth?: AuthInfo }).auth?.extra?.userId;
+    const userId =
+      typeof tokenUserId === 'string' && !res.locals.fixedToken ? tokenUserId : (await multiUser.users.owner())?.userId;
+    const runtime = userId ? await multiUser.runtimes.get(userId) : null;
+    if (!runtime) {
+      // Pending, rejected or removed: the token must stop working for good.
+      if (typeof tokenUserId === 'string') await multiUser.oauthStore.revokeUser(tokenUserId);
+      res
+        .status(401)
+        .set('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${resourceMetadataUrl}"`)
+        .json({ error: 'invalid_token' });
+      return null;
+    }
+    return {
+      ...context,
+      client: runtime.client,
+      sessionBox: runtime.sessionBox,
+      config: { ...context.config, downloadDir: join(context.config.downloadDir, runtime.userId) },
+      downloadLinks,
+    };
+  }
+
   app.all(MCP_PATH, express.json({ limit: '4mb' }), authenticate, (req, res, next) => {
-    handleMcp({ ...context, downloadLinks }, allowedHosts, req, res).catch(next);
+    const run = async () => {
+      const toolContext = options.multiUser ? await userContext(req, res) : { ...context, downloadLinks };
+      if (toolContext) await handleMcp(toolContext, allowedHosts, req, res);
+    };
+    run().catch(next);
   });
 
   app.use((_req, res) => {

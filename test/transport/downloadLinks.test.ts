@@ -40,3 +40,24 @@ describe('DownloadLinks', () => {
     expect(new DownloadLinks('https://ed.example.fr', 60_000).resolve('nope')).toBeNull();
   });
 });
+
+describe('purgeOldFiles', () => {
+  it('removes files older than maxAge and keeps fresh ones; a missing dir is fine', async () => {
+    const { mkdtemp, readdir, rm, utimes, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { purgeOldFiles } = await import('../../src/transport/downloadLinks.js');
+    const dir = await mkdtemp(join(tmpdir(), 'ed-purge-'));
+    const now = Date.now();
+    await writeFile(join(dir, 'vieux.pdf'), 'x');
+    await writeFile(join(dir, 'neuf.pdf'), 'x');
+    const old = new Date(now - 2 * 60 * 60 * 1000);
+    await utimes(join(dir, 'vieux.pdf'), old, old);
+
+    await purgeOldFiles(dir, 60 * 60 * 1000, () => now);
+
+    expect(await readdir(dir)).toEqual(['neuf.pdf']);
+    await expect(purgeOldFiles(join(dir, 'absent'), 1000)).resolves.toBeUndefined();
+    await rm(dir, { recursive: true, force: true });
+  });
+});

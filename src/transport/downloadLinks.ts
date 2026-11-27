@@ -11,6 +11,8 @@
  * failure mode for something meant to be short-lived.
  */
 import { randomBytes } from 'node:crypto';
+import { readdir, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export const DOWNLOAD_PATH_PREFIX = '/downloads/';
 
@@ -63,5 +65,21 @@ export class DownloadLinks {
     for (const [token, entry] of this.entries) {
       if (entry.expiresAt < now) this.entries.delete(token);
     }
+  }
+}
+
+/** Deletes the files of `dir` older than `maxAgeMs`: their links are dead anyway. */
+export async function purgeOldFiles(dir: string, maxAgeMs: number, now: () => number = Date.now): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  for (const name of names) {
+    const path = join(dir, name);
+    const info = await stat(path).catch(() => null);
+    if (info?.isFile() && info.mtimeMs < now() - maxAgeMs) await rm(path, { force: true });
   }
 }
