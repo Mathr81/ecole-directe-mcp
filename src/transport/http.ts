@@ -22,6 +22,7 @@ import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelconte
 import { buildServer, type ToolContext } from '../mcp/server.js';
 import { EcoleDirecteOAuthProvider, LOGIN_PATH, SUPPORTED_SCOPES, TWO_FACTOR_PATH } from '../oauth/provider.js';
 import { MISSING_KEY_MESSAGE, type MultiUser } from '../users/multiUser.js';
+import { mountAdmin } from '../admin/admin.js';
 import { isAuthorized } from './httpAuth.js';
 import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
@@ -139,6 +140,12 @@ export async function startHttpServer(
       multiUser: options.multiUser,
       resourceUrl: oauth.publicUrl,
       adminUrl: new URL('/admin', resourceUrl.origin).href,
+    });
+
+    mountAdmin(app, {
+      multiUser: options.multiUser,
+      passphrase: oauth.passphrase,
+      secureCookie: resourceUrl.protocol === 'https:',
     });
 
     const form = express.urlencoded({ extended: false, limit: '16kb' });
