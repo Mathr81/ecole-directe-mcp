@@ -19,8 +19,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { buildServer, type ToolContext } from '../mcp/server.js';
-import { CONSENT_PATH, EcoleDirecteOAuthProvider, SUPPORTED_SCOPES } from '../oauth/provider.js';
-import { OAuthStore } from '../oauth/store.js';
+import { EcoleDirecteOAuthProvider, LOGIN_PATH, SUPPORTED_SCOPES, TWO_FACTOR_PATH } from '../oauth/provider.js';
+import { MISSING_KEY_MESSAGE, type MultiUser } from '../users/multiUser.js';
 import { isAuthorized } from './httpAuth.js';
 import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
 import type { HealthState, SessionMonitor } from '../health/sessionMonitor.js';
@@ -62,6 +62,8 @@ async function handleMcp(
 export interface StartHttpServerOptions {
   /** Last result of the periodic session check; without one, /health reports `unknown`. */
   monitor?: Pick<SessionMonitor, 'state'>;
+  /** Required when OAuth is enabled: OAuth means multi-user. */
+  multiUser?: MultiUser;
 }
 
 const UNKNOWN_HEALTH: HealthState = { status: 'unknown', reason: null, since: null, checkedAt: null };
@@ -73,6 +75,7 @@ export async function startHttpServer(
   const { host, port, authToken } = context.config.http;
   const oauth = context.config.oauth;
 
+  if (oauth.enabled && !options.multiUser) throw new Error(MISSING_KEY_MESSAGE);
   if (!authToken && !oauth.enabled) {
     throw new Error(
       "Le transport HTTP n'a aucun moyen d'authentifier ses appelants. Définis MCP_AUTH_TOKEN " +
@@ -126,18 +129,32 @@ export async function startHttpServer(
 
   let oauthGuard: ReturnType<typeof requireBearerAuth> | undefined;
 
-  if (oauth.enabled) {
-    const provider = new EcoleDirecteOAuthProvider({
-      store: new OAuthStore(oauth.storePath),
-      passphrase: oauth.passphrase,
-      resourceUrl: oauth.publicUrl,
-    });
+  if (oauth.enabled && options.multiUser) {
     const resourceUrl = new URL(oauth.publicUrl);
     const issuerUrl = new URL(resourceUrl.origin);
+    const provider = new EcoleDirecteOAuthProvider({
+      multiUser: options.multiUser,
+      resourceUrl: oauth.publicUrl,
+      adminUrl: new URL('/admin', resourceUrl.origin).href,
+    });
 
-    app.post(CONSENT_PATH, express.urlencoded({ extended: false }), (req, res, next) => {
-      const body = req.body as { pending?: string; passphrase?: string };
-      provider.handleConsent(res, body.pending ?? '', body.passphrase ?? '').catch(next);
+    const form = express.urlencoded({ extended: false, limit: '16kb' });
+    app.post(LOGIN_PATH, form, (req, res, next) => {
+      const body = req.body as { pending?: string; username?: string; password?: string };
+      provider
+        .handleLogin(res, {
+          pending: String(body.pending ?? ''),
+          username: String(body.username ?? ''),
+          password: String(body.password ?? ''),
+          ip: req.ip ?? '',
+        })
+        .catch(next);
+    });
+    app.post(TWO_FACTOR_PATH, form, (req, res, next) => {
+      const body = req.body as { pending?: string; answer?: string };
+      provider
+        .handleTwoFactor(res, { pending: String(body.pending ?? ''), answer: String(body.answer ?? ''), ip: req.ip ?? '' })
+        .catch(next);
     });
 
     // Must be mounted at the application root: it owns /authorize, /token,

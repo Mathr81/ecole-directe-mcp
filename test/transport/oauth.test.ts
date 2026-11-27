@@ -1,21 +1,33 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../../src/config.js';
 import { createSessionBox } from '../../src/client/sessionBox.js';
 import { startHttpServer, type StartHttpServerResult } from '../../src/transport/http.js';
+import { InvalidCredentialsError, SchoolUnavailableError } from '../../src/client/errors.js';
+import { writeSession } from '../../src/store/sessionStore.js';
+import type { MultiUser } from '../../src/users/multiUser.js';
 import { FakeEcoleDirecteClient, makeSession } from '../fakes/FakeEcoleDirecteClient.js';
+import { buildMultiUser, PerUserFake } from '../fakes/multiUserFake.js';
 
 const PASSPHRASE = 'ma-phrase-secrete-de-test';
+const PASSWORD = 'mot-de-passe-secret';
 const REDIRECT_URI = 'https://claude.ai/api/mcp/auth_callback';
 
 let running: StartHttpServerResult | null = null;
 let tempDir = '';
 /** Rebuilt per test so the advertised metadata matches the bound port. */
 let publicUrl = '';
+let fake: PerUserFake;
+let multiUser: MultiUser;
+let webhookCalls: string[] = [];
+const fakeFetch = (async (_url: string, init: RequestInit) => {
+  webhookCalls.push(JSON.parse(String(init.body)).content as string);
+  return new Response(null, { status: 204 });
+}) as unknown as typeof fetch;
 
 interface Reply {
   status: number;
@@ -57,28 +69,34 @@ function request(
 async function start(extraEnv: Record<string, string> = {}) {
   // Bind an ephemeral port first, then restart on that same port so the
   // advertised issuer and resource URLs match where the server really is.
-  const probe = await startHttpServer(buildContext({ MCP_HTTP_PORT: '0', ...extraEnv }, 'http://127.0.0.1:1/mcp'));
+  const probe = await startServer({ MCP_HTTP_PORT: '0', ...extraEnv }, 'http://127.0.0.1:1/mcp');
   const port = probe.port;
   await probe.close();
   publicUrl = `http://127.0.0.1:${port}${'/mcp'}`;
-  running = await startHttpServer(buildContext({ MCP_HTTP_PORT: String(port), ...extraEnv }, publicUrl));
+  running = await startServer({ MCP_HTTP_PORT: String(port), ...extraEnv }, publicUrl);
   return { port };
 }
 
-function buildContext(env: Record<string, string>, url: string) {
-  const config = loadConfig(
+async function startServer(env: Record<string, string>, url: string) {
+  const built = await buildMultiUser(
     {
       MCP_HTTP_HOST: '127.0.0.1',
       MCP_PUBLIC_URL: url,
       MCP_OAUTH_PASSPHRASE: PASSPHRASE,
       MCP_OAUTH_STORE_PATH: join(tempDir, 'oauth.json'),
+      SESSION_PATH: join(tempDir, 'session.json'),
+      DOWNLOAD_DIR: join(tempDir, 'downloads'),
+      NOTIFY_WEBHOOK_URL: 'https://hook.test/x',
       // The DNS-rebinding guard compares the whole Host header, port included.
       MCP_ALLOWED_HOSTS: new URL(url).host,
       ...env,
     },
-    { readOnlyDefault: true },
+    fake,
+    fakeFetch,
   );
-  return { client: new FakeEcoleDirecteClient(), sessionBox: createSessionBox(makeSession(), async () => {}), config };
+  multiUser = built.multiUser;
+  const context = { client: fake, sessionBox: createSessionBox(makeSession(), async () => {}), config: built.config };
+  return startHttpServer(context, { multiUser });
 }
 
 const FORM = { 'Content-Type': 'application/x-www-form-urlencoded' };
@@ -105,8 +123,7 @@ async function registerClient(port: number): Promise<string> {
   return response.json<{ client_id: string }>().client_id;
 }
 
-/** Runs authorize → consent → code, returning the authorization code. */
-async function authorizeAndConsent(port: number, clientId: string, challenge: string, state = 'st-1') {
+async function openLoginPage(port: number, clientId: string, challenge: string, state = 'st-1') {
   const query = new URLSearchParams({
     client_id: clientId,
     response_type: 'code',
@@ -120,17 +137,46 @@ async function authorizeAndConsent(port: number, clientId: string, challenge: st
   expect(page.status).toBe(200);
   const pending = /name="pending" value="([^"]+)"/.exec(page.body)?.[1];
   expect(pending).toBeTruthy();
+  return pending as string;
+}
 
-  const consent = await request(port, '/oauth/consent', {
+function postLogin(port: number, pending: string, username: string, password = PASSWORD) {
+  return request(port, '/oauth/login', {
     method: 'POST',
     headers: FORM,
-    body: new URLSearchParams({ pending: pending as string, passphrase: PASSPHRASE }).toString(),
+    body: new URLSearchParams({ pending, username, password }).toString(),
   });
-  expect(consent.status).toBe(302);
-  const location = new URL(String(consent.headers.location));
+}
+
+/** Runs authorize → École Directe login → code, returning the authorization code. */
+async function authorizeAndLogin(port: number, clientId: string, challenge: string, username = 'jdupont', state = 'st-1') {
+  const pending = await openLoginPage(port, clientId, challenge, state);
+  const login = await postLogin(port, pending, username);
+  expect(login.status).toBe(302);
+  const location = new URL(String(login.headers.location));
   expect(location.origin + location.pathname).toBe(REDIRECT_URI);
   expect(location.searchParams.get('state')).toBe(state);
-  return { code: location.searchParams.get('code') as string, pending: pending as string };
+  return { code: location.searchParams.get('code') as string, pending };
+}
+
+/** Full flow down to an access token. */
+async function connect(port: number, username = 'jdupont') {
+  const clientId = await registerClient(port);
+  const { verifier, challenge } = pkce();
+  const { code } = await authorizeAndLogin(port, clientId, challenge, username);
+  const token = await exchange(port, clientId, {
+    grant_type: 'authorization_code',
+    code,
+    code_verifier: verifier,
+    redirect_uri: REDIRECT_URI,
+  });
+  expect(token.status).toBe(200);
+  return token.json<{ access_token: string; refresh_token: string }>().access_token;
+}
+
+async function approve(username: string) {
+  const record = (await multiUser.users.findByUsername(username))!;
+  await multiUser.users.save({ ...record, status: 'approved', approvedAt: new Date().toISOString() });
 }
 
 async function exchange(port: number, clientId: string, body: Record<string, string>) {
@@ -143,9 +189,15 @@ async function exchange(port: number, clientId: string, body: Record<string, str
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'ed-oauth-'));
+  fake = new PerUserFake();
+  webhookCalls = [];
+  // The owner, imported from session.json at startup like on the real server.
+  await writeSession(makeSession({ username: 'jdupont' }), join(tempDir, 'session.json'));
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await running?.close();
   running = null;
   await rm(tempDir, { recursive: true, force: true });
@@ -198,7 +250,7 @@ describe('OAuth authorization code flow', () => {
     const { port } = await start();
     const clientId = await registerClient(port);
     const { verifier, challenge } = pkce();
-    const { code } = await authorizeAndConsent(port, clientId, challenge);
+    const { code } = await authorizeAndLogin(port, clientId, challenge);
 
     const token = await exchange(port, clientId, {
       grant_type: 'authorization_code',
@@ -221,37 +273,23 @@ describe('OAuth authorization code flow', () => {
     expect(call.json<{ result: { tools: unknown[] } }>().result.tools.length).toBeGreaterThan(0);
   });
 
-  it('rejects a wrong passphrase without issuing a code', async () => {
+  it('rejects wrong École Directe credentials without issuing a code', async () => {
     const { port } = await start();
     const clientId = await registerClient(port);
-    const { challenge } = pkce();
-    const query = new URLSearchParams({
-      client_id: clientId,
-      response_type: 'code',
-      redirect_uri: REDIRECT_URI,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state: 'st',
-    });
-    const page = await request(port, `/authorize?${query}`);
-    const pending = /name="pending" value="([^"]+)"/.exec(page.body)?.[1] as string;
+    fake.queueFailure('login', new InvalidCredentialsError(505, 'mauvais'));
 
-    const consent = await request(port, '/oauth/consent', {
-      method: 'POST',
-      headers: FORM,
-      body: new URLSearchParams({ pending, passphrase: 'mauvaise' }).toString(),
-    });
+    const login = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'jdupont', 'mauvais');
 
-    expect(consent.status).toBe(401);
-    expect(consent.headers.location).toBeUndefined();
-    expect(consent.body).toContain('incorrecte');
+    expect(login.status).toBe(401);
+    expect(login.headers.location).toBeUndefined();
+    expect(login.body).toContain('Identifiant ou mot de passe incorrect.');
   });
 
   it('rejects a mismatched PKCE verifier', async () => {
     const { port } = await start();
     const clientId = await registerClient(port);
     const { challenge } = pkce();
-    const { code } = await authorizeAndConsent(port, clientId, challenge);
+    const { code } = await authorizeAndLogin(port, clientId, challenge);
 
     const token = await exchange(port, clientId, {
       grant_type: 'authorization_code',
@@ -267,7 +305,7 @@ describe('OAuth authorization code flow', () => {
     const { port } = await start();
     const clientId = await registerClient(port);
     const { verifier, challenge } = pkce();
-    const { code } = await authorizeAndConsent(port, clientId, challenge);
+    const { code } = await authorizeAndLogin(port, clientId, challenge);
     const body = { grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: REDIRECT_URI };
 
     expect((await exchange(port, clientId, body)).status).toBe(200);
@@ -282,7 +320,7 @@ describe('OAuth refresh', () => {
     const { port } = await start();
     const clientId = await registerClient(port);
     const { verifier, challenge } = pkce();
-    const { code } = await authorizeAndConsent(port, clientId, challenge);
+    const { code } = await authorizeAndLogin(port, clientId, challenge);
     const first = (
       await exchange(port, clientId, {
         grant_type: 'authorization_code',
@@ -311,7 +349,7 @@ describe('OAuth refresh', () => {
     const { port } = await start();
     const clientId = await registerClient(port);
     const { verifier, challenge } = pkce();
-    const { code } = await authorizeAndConsent(port, clientId, challenge);
+    const { code } = await authorizeAndLogin(port, clientId, challenge);
     const tokens = (
       await exchange(port, clientId, {
         grant_type: 'authorization_code',
@@ -322,7 +360,7 @@ describe('OAuth refresh', () => {
     ).json<{ access_token: string }>();
 
     await running?.close();
-    running = await startHttpServer(buildContext({ MCP_HTTP_PORT: String(port) }, publicUrl));
+    running = await startServer({ MCP_HTTP_PORT: String(port) }, publicUrl);
 
     const call = await request(port, '/mcp', {
       method: 'POST',
@@ -331,6 +369,181 @@ describe('OAuth refresh', () => {
     });
 
     expect(call.status).toBe(200);
+  });
+});
+
+describe('multi-user login', () => {
+  it('a new user gets a pending page, no code, and a webhook', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+
+    const login = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+
+    expect(login.status).toBe(200);
+    expect(login.body).toContain('Demande envoyée');
+    expect(login.headers.location).toBeUndefined();
+    expect(webhookCalls).toHaveLength(1);
+    expect(webhookCalls[0]).toContain('ami');
+    expect(webhookCalls[0]).toContain(`127.0.0.1:${port}/admin`);
+    expect((await multiUser.users.findByUsername('ami'))!.status).toBe('pending');
+  });
+
+  it('a pending user logging in again sees still pending', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+
+    const again = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+
+    expect(again.status).toBe(200);
+    expect(again.body).toContain('toujours en attente');
+    expect(webhookCalls).toHaveLength(1);
+  });
+
+  it('an approved user gets a code tied to their userId', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+    await approve('ami');
+
+    const token = await connect(port, 'ami');
+
+    expect((await multiUser.oauthStore.findAccessToken(token))!.userId).toBe(multiUser.users.idFor('ami'));
+  });
+
+  it('reconnecting an approved user keeps the same userId and both tokens work', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+    await approve('ami');
+    const forget = vi.spyOn(multiUser.runtimes, 'forget');
+
+    const first = await connect(port, 'ami');
+    const second = await connect(port, ' AMI ');
+
+    const id = multiUser.users.idFor('ami');
+    expect((await multiUser.oauthStore.findAccessToken(first))!.userId).toBe(id);
+    expect((await multiUser.oauthStore.findAccessToken(second))!.userId).toBe(id);
+    expect((await multiUser.users.list()).filter((u) => u.userId === id)).toHaveLength(1);
+    expect(forget).toHaveBeenCalledWith(id);
+  });
+
+  it('a non-student account is refused before any record or webhook', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    fake.accountKindFor = () => '1';
+    const before = (await multiUser.users.list()).length;
+
+    const login = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'parent');
+
+    expect(login.status).toBe(403);
+    expect(login.body).toContain('Seuls les comptes élèves sont pris en charge');
+    expect((await multiUser.users.list()).length).toBe(before);
+    expect(webhookCalls).toHaveLength(0);
+  });
+
+  it('wrong credentials: 401 and the 6th attempt is blocked without calling École Directe', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    for (let i = 0; i < 5; i++) fake.queueFailure('login', new InvalidCredentialsError(505, 'mauvais'));
+
+    for (let i = 0; i < 5; i++) {
+      const attempt = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami', 'x');
+      expect(attempt.status).toBe(401);
+    }
+    const blocked = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami', 'x');
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.body).toContain('Trop de tentatives, réessaie plus tard.');
+    expect(fake.callCounts.login).toBe(5);
+  });
+
+  it('École Directe down: 502 and not counted as a credential failure', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    fake.queueFailure('login', new SchoolUnavailableError(535, 'maintenance'));
+    for (let i = 0; i < 5; i++) fake.queueFailure('login', new InvalidCredentialsError(505, 'mauvais'));
+
+    const down = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami');
+    expect(down.status).toBe(502);
+    expect(down.body).toContain('ne répond pas');
+    for (let i = 0; i < 5; i++) {
+      const attempt = await postLogin(port, await openLoginPage(port, clientId, pkce().challenge), 'ami', 'x');
+      expect(attempt.status).toBe(401);
+    }
+  });
+
+  it('QCM flow ends with a code for the owner', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    fake.twoFactorChallenge = { token: 't', question: 'Q ?', propositions: ['A', 'B'] };
+    const pending = await openLoginPage(port, clientId, pkce().challenge);
+
+    const quiz = await postLogin(port, pending, 'jdupont');
+    expect(quiz.status).toBe(200);
+    expect(quiz.body).toContain('Q ?');
+    expect(quiz.body).toContain('value="A"');
+    expect(quiz.body).toContain('value="B"');
+
+    const answer = await request(port, '/oauth/qcm', {
+      method: 'POST',
+      headers: FORM,
+      body: new URLSearchParams({ pending, answer: 'A' }).toString(),
+    });
+    expect(answer.status).toBe(302);
+    expect(String(answer.headers.location)).toContain('code=');
+  });
+
+  it('QCM on an expired or consumed pending request', async () => {
+    const { port } = await start();
+
+    const answer = await request(port, '/oauth/qcm', {
+      method: 'POST',
+      headers: FORM,
+      body: new URLSearchParams({ pending: 'inconnu', answer: 'A' }).toString(),
+    });
+
+    expect(answer.status).toBe(400);
+    expect(answer.body).toContain('Demande expirée');
+    expect(fake.callCounts.completeTwoFactor).toBeUndefined();
+  });
+
+  it('the password never reaches the OAuth store or the user files', async () => {
+    const { port } = await start();
+    const clientId = await registerClient(port);
+    fake.twoFactorChallenge = { token: 't', question: 'Q ?', propositions: ['A'] };
+    const pending = await openLoginPage(port, clientId, pkce().challenge);
+    await postLogin(port, pending, 'ami');
+    await request(port, '/oauth/qcm', {
+      method: 'POST',
+      headers: FORM,
+      body: new URLSearchParams({ pending, answer: 'A' }).toString(),
+    });
+
+    const files = [join(tempDir, 'oauth.json'), ...(await readdir(join(tempDir, 'users'))).map((f) => join(tempDir, 'users', f))];
+    for (const file of files) expect(await readFile(file, 'utf8')).not.toContain(PASSWORD);
+  });
+
+  it('OWNER_ED_USERNAME creates the owner on a fresh install', async () => {
+    await rm(join(tempDir, 'session.json'));
+    const { port } = await start({ OWNER_ED_USERNAME: 'Moi' });
+
+    await connect(port, 'moi');
+
+    const owner = (await multiUser.users.owner())!;
+    expect(owner.username).toBe('moi');
+    expect(owner.status).toBe('approved');
+    expect(webhookCalls).toHaveLength(0);
+  });
+
+  it('startHttpServer refuses OAuth without multi-user wiring', async () => {
+    const config = loadConfig(
+      { MCP_HTTP_PORT: '0', MCP_PUBLIC_URL: 'http://127.0.0.1:1/mcp', MCP_OAUTH_PASSPHRASE: 'p' },
+      { readOnlyDefault: true },
+    );
+    await expect(
+      startHttpServer({ client: fake, sessionBox: createSessionBox(makeSession(), async () => {}), config }),
+    ).rejects.toThrow(/SESSION_ENCRYPTION_KEY/);
   });
 });
 
