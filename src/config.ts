@@ -26,6 +26,16 @@ export interface OAuthConfig {
   storePath: string;
 }
 
+export interface MultiUserConfig {
+  /** 64 hex chars; required when OAuth is enabled (multi-user mode). */
+  encryptionKey: string;
+  /** Optional: POSTed `{ content }` when someone asks for access. */
+  notifyWebhookUrl: string;
+  /** Optional: the École Directe username that becomes owner on a fresh install. */
+  ownerUsername: string;
+  usersDir: string;
+}
+
 export interface Config {
   sessionPath: string;
   downloadDir: string;
@@ -35,6 +45,7 @@ export interface Config {
   healthCheckIntervalMs: number;
   http: HttpConfig;
   oauth: OAuthConfig;
+  multiUser: MultiUserConfig;
 }
 
 const DEFAULT_SESSION_MAX_AGE_MS = 15 * 60 * 1000;
@@ -118,6 +129,12 @@ export function loadConfig(
       publicUrl,
       passphrase,
       storePath: env.MCP_OAUTH_STORE_PATH ?? defaultOAuthStorePath(sessionPath),
+    },
+    multiUser: {
+      encryptionKey: env.SESSION_ENCRYPTION_KEY ?? '',
+      notifyWebhookUrl: env.NOTIFY_WEBHOOK_URL ?? '',
+      ownerUsername: env.OWNER_ED_USERNAME ?? '',
+      usersDir: join(dirname(sessionPath), 'users'),
     },
   };
 }

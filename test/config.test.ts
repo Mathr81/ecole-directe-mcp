@@ -25,6 +25,20 @@ describe('loadConfig', () => {
     });
   });
 
+  it('multiUser defaults to empty strings and usersDir sits next to the session', () => {
+    const { multiUser } = loadConfig({ SESSION_PATH: '/data/session.json' });
+    expect(multiUser).toEqual({ encryptionKey: '', notifyWebhookUrl: '', ownerUsername: '', usersDir: '/data/users' });
+  });
+
+  it('multiUser reads its variables', () => {
+    const { multiUser } = loadConfig({
+      SESSION_ENCRYPTION_KEY: 'k',
+      NOTIFY_WEBHOOK_URL: 'https://hook',
+      OWNER_ED_USERNAME: 'moi',
+    });
+    expect(multiUser).toMatchObject({ encryptionKey: 'k', notifyWebhookUrl: 'https://hook', ownerUsername: 'moi' });
+  });
+
   describe('HTTP settings', () => {
     it('binds loopback and carries no token by default', () => {
       // Not 0.0.0.0: on the VPS the bind address is set to the Tailscale
