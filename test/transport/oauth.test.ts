@@ -203,6 +203,26 @@ afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
+describe('home page and static files', () => {
+  it('the home page gives the address to paste in Claude and the tutorial', async () => {
+    const { port } = await start();
+    const home = await request(port, '/');
+    expect(home.status).toBe(200);
+    expect(home.headers['content-type']).toContain('text/html');
+    expect(home.body).toContain(`data-copy="${publicUrl}"`);
+    expect(home.body).toContain('Le tuto, en 5 étapes');
+  });
+
+  it('serves the stylesheet and the fonts, and nothing outside public/', async () => {
+    const { port } = await start();
+    const css = await request(port, '/static/app.css');
+    expect(css.status).toBe(200);
+    expect(css.headers['content-type']).toContain('text/css');
+    expect((await request(port, '/static/fonts/figtree-latin.woff2')).status).toBe(200);
+    expect((await request(port, '/static/..%2Fpackage.json')).status).toBe(404);
+  });
+});
+
 describe('OAuth discovery', () => {
   it('advertises protected resource metadata matching the MCP URL exactly', async () => {
     // Claude compares this against the URL the user typed, path included.

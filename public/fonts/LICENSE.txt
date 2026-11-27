@@ -1,0 +1,2 @@
+Bricolage Grotesque (https://github.com/ateliertriay/bricolage) and Figtree (https://github.com/erikdkennedy/figtree)
+are licensed under the SIL Open Font License 1.1: https://openfontlicense.org

@@ -213,4 +213,73 @@ describe('admin page', () => {
     expect(reply.status).toBe(303);
     expect(String((reply.headers['set-cookie'] as string[])[0])).toMatch(/ed_admin=;/);
   });
+
+  it('the people page, a person and the journal need the cookie', async () => {
+    await start();
+    const id = await addUser('ami', 'approved', 'Ami Secret');
+    for (const path of ['/admin/users', `/admin/users/${id}`, '/admin/activity']) {
+      const page = await send('GET', path);
+      expect(page.body).toContain('name="passphrase"');
+      expect(page.body).not.toContain('Ami Secret');
+    }
+  });
+
+  it('the dashboard counts tool calls and lists pending requests first', async () => {
+    await start();
+    const id = await addUser('ami', 'approved', 'Ami');
+    await addUser('nouveau', 'pending', 'Nouveau Venu');
+    await mu.activity.record({ type: 'tool', userId: id, tool: 'get_grades', ok: true, ms: 80 });
+    await mu.activity.record({ type: 'tool', userId: id, tool: 'get_grades', ok: false, ms: 80 });
+
+    const page = await send('GET', '/admin', { cookie: await login() });
+
+    expect(page.body).toContain('Une demande attend ta réponse');
+    expect(page.body).toContain('Nouveau Venu');
+    expect(page.body).toContain('50 %');
+    expect(page.body).toContain('<svg class="chart"');
+  });
+
+  it('a person page shows their activity; an unknown id is 404', async () => {
+    await start();
+    const id = await addUser('ami', 'approved', 'Ami');
+    await mu.activity.record({ type: 'tool', userId: id, tool: 'get_homework', ok: true, ms: 80 });
+    const cookie = await login();
+
+    const page = await send('GET', `/admin/users/${id}`, { cookie });
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('a consulté ses devoirs');
+
+    expect((await send('GET', `/admin/users/${'0'.repeat(64)}`, { cookie })).status).toBe(404);
+  });
+
+  it('the journal filters by kind and by person', async () => {
+    await start();
+    const a = await addUser('a', 'approved', 'Alice');
+    const b = await addUser('b', 'approved', 'Bob');
+    await mu.activity.record({ type: 'tool', userId: a, tool: 'get_grades', ok: true });
+    await mu.activity.record({ type: 'tool', userId: b, tool: 'get_timetable', ok: false });
+    await mu.activity.record({ type: 'login', userId: a });
+    const cookie = await login();
+
+    const errors = await send('GET', '/admin/activity?kind=errors', { cookie });
+    expect(errors.body).toContain('emploi du temps');
+    expect(errors.body).not.toContain('a consulté ses notes');
+
+    const alice = await send('GET', `/admin/activity?user=${a}`, { cookie });
+    expect(alice.body).toContain("s'est connecté");
+    expect(alice.body).not.toContain('emploi du temps');
+  });
+
+  it('an action sends the owner back to the page it came from, never elsewhere', async () => {
+    await start();
+    const cookie = await login();
+    const one = await addUser('un', 'pending');
+    const two = await addUser('deux', 'pending');
+
+    const back = await send('POST', `/admin/users/${one}/approve`, { cookie, form: { back: '/admin/users' } });
+    expect(back.headers.location).toBe('/admin/users');
+
+    const evil = await send('POST', `/admin/users/${two}/approve`, { cookie, form: { back: 'https://evil.example/admin' } });
+    expect(evil.headers.location).toBe('/admin');
+  });
 });

@@ -150,7 +150,8 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
   }
 
   private renderMessage(res: Response, status: number, title: string, message: string): void {
-    this.send(res, status, renderMessagePage({ title, message }));
+    // Every 200 here is a request waiting for the owner; anything else went wrong.
+    this.send(res, status, renderMessagePage({ title, message, tone: status === 200 ? 'pending' : 'error' }));
   }
 
   private send(res: Response, status: number, html: string): void {
@@ -318,7 +319,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
 
     if (existing) {
       await users.save({ ...existing, ...fresh });
-      this.renderMessage(res, 200, 'Demande en attente', 'Ta demande est toujours en attente de validation.');
+      this.renderMessage(res, 200, 'Demande en attente', 'Ta demande est toujours en attente de validation. Réessaie une fois que le propriétaire du serveur t\'a validé.');
       return;
     }
 
@@ -333,7 +334,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
       res,
       200,
       'Demande envoyée',
-      'Le propriétaire du serveur doit valider ton accès. Une fois validé, relance la connexion depuis ton IA.',
+      "Le propriétaire du serveur doit valider ton accès. Une fois validé, retourne dans ton IA et clique à nouveau sur « Se connecter ».",
     );
   }
 

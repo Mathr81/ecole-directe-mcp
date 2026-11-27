@@ -241,9 +241,10 @@ aux métadonnées : un scanner se fait refouler avant même d'atteindre
 l'authentification.
 
 Quelques chemins font exception, car ils sont ouverts par **le navigateur**
-de l'utilisateur, pas par Anthropic : `/authorize`, la connexion École
-Directe (`/oauth/login`, `/oauth/qcm`), la page d'admin (`/admin…`) et les
-liens de téléchargement `/downloads/<jeton>`. Un `deny all` global les
+de l'utilisateur, pas par Anthropic : la page d'accueil et son tuto (`/`),
+les feuilles de style et polices (`/static/…`), `/authorize`, la connexion
+École Directe (`/oauth/login`, `/oauth/qcm`), la page d'admin (`/admin…`) et
+les liens de téléchargement `/downloads/<jeton>`. Un `deny all` global les
 bloquerait : l'autorisation échouerait sur un 403, et aucun lien ne
 s'ouvrirait. Ils restent donc ouverts, protégés par la limitation de débit
 (5 échecs par identifiant en 15 min, 20 essais par IP et par heure, 10 échecs
@@ -256,9 +257,9 @@ jeton aléatoire qui expire au bout d'une heure pour les liens. Onglet
 proxy_buffering off;
 proxy_read_timeout 3600s;
 
-# Ouverts par le navigateur : autorisation OAuth, connexion École Directe,
-# admin et liens de téléchargement.
-location ~ ^/(authorize|oauth/(login|qcm)|admin(/.*)?|downloads/[A-Za-z0-9_-]+)$ {
+# Ouverts par le navigateur : accueil, styles, autorisation OAuth, connexion
+# École Directe, admin et liens de téléchargement.
+location ~ ^/(|static/[A-Za-z0-9._/-]+|authorize|oauth/(login|qcm)|admin(/.*)?|downloads/[A-Za-z0-9_-]+)$ {
   include conf.d/include/proxy.conf;
 }
 

@@ -23,6 +23,8 @@ import { buildServer, type ToolContext } from '../mcp/server.js';
 import { EcoleDirecteOAuthProvider, LOGIN_PATH, SUPPORTED_SCOPES, TWO_FACTOR_PATH } from '../oauth/provider.js';
 import { MISSING_KEY_MESSAGE, type MultiUser } from '../users/multiUser.js';
 import { mountAdmin } from '../admin/admin.js';
+import { renderLanding } from '../ui/landing.js';
+import { PUBLIC_DIR, STATIC_PREFIX } from '../ui/html.js';
 import { isAuthorized } from './httpAuth.js';
 import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
@@ -145,10 +147,20 @@ export async function startHttpServer(
       adminUrl: new URL('/admin', resourceUrl.origin).href,
     });
 
+    // Stylesheet, script and fonts of the pages below; nothing else lives in public/.
+    app.use(STATIC_PREFIX, express.static(PUBLIC_DIR, { index: false, maxAge: '1d', fallthrough: true }));
+
+    const landing = renderLanding({ mcpUrl: oauth.publicUrl, readOnly: context.config.readOnly });
+    app.get('/', (_req, res) => {
+      res.set('Content-Type', 'text/html; charset=utf-8').set('Cache-Control', 'no-cache').send(landing);
+    });
+
     mountAdmin(app, {
       multiUser: options.multiUser,
       passphrase: oauth.passphrase,
       secureCookie: resourceUrl.protocol === 'https:',
+      readOnly: context.config.readOnly,
+      health: options.monitor ? () => options.monitor!.state() : undefined,
     });
 
     const form = express.urlencoded({ extended: false, limit: '16kb' });

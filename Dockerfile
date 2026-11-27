@@ -19,6 +19,8 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+# Stylesheet, script and self-hosted fonts of the web pages.
+COPY public ./public
 
 # Session and device id live on the mounted volume. The device id especially:
 # École Directe ties the QCM exemption to it, so losing it on every container
