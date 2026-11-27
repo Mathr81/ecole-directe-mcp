@@ -161,6 +161,30 @@ describe('multi-user MCP requests', () => {
     expect(asB).not.toContain('"label":"a"');
   });
 
+  it('each tool call lands in the journal with its user, tool, outcome and duration', async () => {
+    const a = await addUser('a');
+    fake.queueFailure('getTimeline', new Error('boom'));
+
+    await callTool(a.token, 'get_grades');
+    await callTool(a.token, 'get_timeline');
+
+    const tools = mu.activity.events().filter((e) => e.type === 'tool');
+    expect(tools.map(({ userId, tool, ok }) => ({ userId, tool, ok }))).toEqual([
+      { userId: a.userId, tool: 'get_grades', ok: true },
+      { userId: a.userId, tool: 'get_timeline', ok: false },
+    ]);
+    expect(typeof tools[0].ms).toBe('number');
+    // Facts only: never the arguments or the result.
+    expect(JSON.stringify(tools)).not.toContain('label');
+  });
+
+  it('removing a user also erases their journal', async () => {
+    const a = await addUser('a');
+    await callTool(a.token, 'get_grades');
+    await mu.removeUser(a.userId);
+    expect(mu.activity.events().some((e) => e.userId === a.userId)).toBe(false);
+  });
+
   it("a pending user's token gets 401 with WWW-Authenticate", async () => {
     const pending = await addUser('attente', 'pending');
 
@@ -196,6 +220,7 @@ describe('multi-user MCP requests', () => {
     expect(first.result!.content[0].text).toContain('reconnecte le connecteur');
 
     expect((await callTool(a.token, 'get_grades')).status).toBe(401);
+    expect(mu.activity.events().some((e) => e.type === 'session_lost' && e.userId === a.userId)).toBe(true);
   });
 
   it("downloads land in the user's folder", async () => {

@@ -104,10 +104,14 @@ export function mountAdmin(app: Express, options: AdminOptions): void {
       if (user && !user.isOwner) {
         if (verb === 'approve' && user.status === 'pending') {
           await multiUser.users.save({ ...user, status: 'approved', approvedAt: new Date(now()).toISOString() });
+          await multiUser.activity.record({ type: 'approved', userId });
         } else if (verb === 'reject' && user.status === 'pending') {
           await multiUser.removeUser(userId);
+          // No userId: a removed user leaves no trace, only the count remains.
+          await multiUser.activity.record({ type: 'rejected' });
         } else if (verb === 'revoke' && user.status === 'approved') {
           await multiUser.removeUser(userId);
+          await multiUser.activity.record({ type: 'revoked' });
         }
       }
       res.redirect(303, '/admin');

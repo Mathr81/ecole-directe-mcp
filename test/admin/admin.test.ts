@@ -157,6 +157,7 @@ describe('admin page', () => {
     const record = (await mu.users.get(id))!;
     expect(record.status).toBe('approved');
     expect(record.approvedAt).toBeTruthy();
+    expect(mu.activity.events()).toMatchObject([{ type: 'approved', userId: id }]);
   });
 
   it('reject removes a pending user', async () => {
@@ -173,6 +174,9 @@ describe('admin page', () => {
     await send('POST', `/admin/users/${id}/revoke`, { cookie: await login(), form: {} });
     expect(await mu.users.get(id)).toBeNull();
     expect(await mu.oauthStore.findAccessToken(accessToken)).toBeUndefined();
+    // Anonymous on purpose: the user asked to leave no trace.
+    expect(mu.activity.events()).toEqual([expect.objectContaining({ type: 'revoked' })]);
+    expect(mu.activity.events()[0].userId).toBeUndefined();
   });
 
   it('the owner cannot be revoked', async () => {

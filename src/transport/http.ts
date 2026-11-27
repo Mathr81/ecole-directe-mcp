@@ -236,6 +236,7 @@ export async function startHttpServer(
       sessionBox: runtime.sessionBox,
       config: { ...context.config, downloadDir: join(context.config.downloadDir, runtime.userId) },
       downloadLinks,
+      onToolCall: (tool, ok, ms) => void multiUser.activity.record({ type: 'tool', userId: runtime.userId, tool, ok, ms }),
     };
   }
 

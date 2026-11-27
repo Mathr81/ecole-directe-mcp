@@ -199,6 +199,8 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
     } catch (error) {
       if (error instanceof InvalidCredentialsError) {
         this.userFailures.hit(userKey);
+        // Only a known user is named: a typo must not become a ghost in the journal.
+        await this.options.multiUser.activity.record({ type: 'login_failed', userId: existing?.userId });
         entry.attempts += 1;
         if (entry.attempts >= MAX_LOGIN_ATTEMPTS) {
           this.pending.delete(input.pending);
@@ -275,7 +277,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
     session: Session,
   ): Promise<void> {
     this.pending.delete(pendingId);
-    const { users, runtimes, notify, ownerUsername } = this.options.multiUser;
+    const { users, runtimes, notify, ownerUsername, activity } = this.options.multiUser;
 
     if (session.accountKind !== STUDENT_ACCOUNT_KIND) {
       this.renderMessage(res, 403, 'Compte non pris en charge', "Seuls les comptes élèves sont pris en charge pour l'instant.");
@@ -293,6 +295,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
       await users.save({ ...existing, ...fresh });
       // The cached runtime still holds the previous session.
       runtimes.forget(userId);
+      await activity.record({ type: 'login', userId });
       await this.redirectWithCode(res, entry, userId);
       return;
     }
@@ -308,6 +311,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
         createdAt: existing?.createdAt ?? at,
         approvedAt: at,
       });
+      await activity.record({ type: 'login', userId });
       await this.redirectWithCode(res, entry, userId);
       return;
     }
@@ -323,6 +327,7 @@ export class EcoleDirecteOAuthProvider implements OAuthServerProvider {
       return;
     }
     await users.save({ userId, username: session.username, ...fresh, status: 'pending', isOwner: false, createdAt: at });
+    await activity.record({ type: 'request', userId });
     await notify(`${session.displayName} demande l'accès à École Directe MCP : ${this.options.adminUrl}`);
     this.renderMessage(
       res,

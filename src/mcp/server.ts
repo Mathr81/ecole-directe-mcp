@@ -29,6 +29,25 @@ export interface ToolContext {
    * caller cannot open. Under stdio the path is local and is returned as is.
    */
   downloadLinks?: Pick<DownloadLinks, 'issue'>;
+  /** Told about every tool call once it ends: the HTTP transport feeds the admin journal with it. */
+  onToolCall?: (tool: string, ok: boolean, ms: number) => void;
+}
+
+/** Times every tool registered from here on and reports how it ended. */
+function reportToolCalls(server: McpServer, onToolCall: NonNullable<ToolContext['onToolCall']>): void {
+  const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name, config, callback) =>
+    register(name, config, async (...args: unknown[]) => {
+      const started = Date.now();
+      let ok = false;
+      try {
+        const result = (await (callback as (...a: unknown[]) => Promise<{ isError?: boolean }>)(...args));
+        ok = !result?.isError;
+        return result;
+      } finally {
+        onToolCall(String(name), ok, Date.now() - started);
+      }
+    });
 }
 
 export function buildServer(context: ToolContext): McpServer {
@@ -38,6 +57,7 @@ export function buildServer(context: ToolContext): McpServer {
     version: '0.1.0',
     icons: SERVER_ICONS,
   });
+  if (context.onToolCall) reportToolCalls(server, context.onToolCall);
   registerGetGrades(server, context);
   registerGetAverages(server, context);
   registerGetHomework(server, context);

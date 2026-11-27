@@ -283,6 +283,7 @@ describe('OAuth authorization code flow', () => {
     expect(login.status).toBe(401);
     expect(login.headers.location).toBeUndefined();
     expect(login.body).toContain('Identifiant ou mot de passe incorrect.');
+    expect(multiUser.activity.events().map((e) => e.type)).toEqual(['login_failed']);
   });
 
   it('rejects a mismatched PKCE verifier', async () => {
@@ -420,6 +421,7 @@ describe('multi-user login', () => {
     expect(webhookCalls[0]).toContain('ami');
     expect(webhookCalls[0]).toContain(`127.0.0.1:${port}/admin`);
     expect((await multiUser.users.findByUsername('ami'))!.status).toBe('pending');
+    expect(multiUser.activity.events()).toMatchObject([{ type: 'request', userId: multiUser.users.idFor('ami') }]);
   });
 
   it('a pending user logging in again sees still pending', async () => {
@@ -443,6 +445,7 @@ describe('multi-user login', () => {
     const token = await connect(port, 'ami');
 
     expect((await multiUser.oauthStore.findAccessToken(token))!.userId).toBe(multiUser.users.idFor('ami'));
+    expect(multiUser.activity.events().map((e) => e.type)).toContain('login');
   });
 
   it('reconnecting an approved user keeps the same userId and both tokens work', async () => {
