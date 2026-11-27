@@ -60,7 +60,8 @@ export function page({ title, body, noindex = true, description }: PageOptions):
 <title>${escapeHtml(title)} · École Directe MCP</title>
 ${description ? `<meta name="description" content="${escapeHtml(description)}">` : ''}
 ${noindex ? '<meta name="robots" content="noindex">' : ''}
-<meta name="theme-color" content="#f4f7ff">
+<meta name="theme-color" content="#f4f7ff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1130" media="(prefers-color-scheme: dark)">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="${FAVICON}">
 <link rel="preload" href="${STATIC_PREFIX}/fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
