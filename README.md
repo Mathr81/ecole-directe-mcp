@@ -84,6 +84,13 @@ Transport HTTP uniquement :
 - `MCP_HTTP_PORT` — port (défaut `8787`)
 - `MCP_ALLOWED_HOSTS` — en-têtes `Host` acceptés, séparés par des virgules (défaut : l'adresse d'écoute)
 
+OAuth / multi-utilisateur (voir plus bas) :
+
+- `MCP_PUBLIC_URL`, `MCP_OAUTH_PASSPHRASE` — activent OAuth ; la phrase secrète protège `/admin`
+- `SESSION_ENCRYPTION_KEY` — **obligatoire avec OAuth**, chiffre les sessions (`openssl rand -hex 32`)
+- `NOTIFY_WEBHOOK_URL` — facultatif, prévenu à chaque demande d'accès
+- `OWNER_ED_USERNAME` — facultatif, propriétaire validé d'office sur une installation neuve
+
 Le `deviceUUID` généré au premier `login` est stocké séparément dans
 `~/.config/ecoledirecte-mcp/device-id`. Ne pas le supprimer entre deux
 logins, sous peine de redéclencher le QCM à chaque fois.
@@ -233,21 +240,25 @@ l'infrastructure d'Anthropic peut parler à `/mcp`, `/token`, `/register` et
 aux métadonnées : un scanner se fait refouler avant même d'atteindre
 l'authentification.
 
-Trois chemins font exception : `/authorize` et `/oauth/consent`, ainsi que
-les liens de téléchargement `/downloads/<jeton>`, sont ouverts par **ton
-navigateur**, pas par Anthropic. Un `deny all` global les
+Quelques chemins font exception, car ils sont ouverts par **le navigateur**
+de l'utilisateur, pas par Anthropic : `/authorize`, la connexion École
+Directe (`/oauth/login`, `/oauth/qcm`), la page d'admin (`/admin…`) et les
+liens de téléchargement `/downloads/<jeton>`. Un `deny all` global les
 bloquerait : l'autorisation échouerait sur un 403, et aucun lien ne
-s'ouvrirait. Ils restent donc ouverts, protégés par la phrase secrète (cinq
-essais par demande) et la limitation de débit du routeur OAuth pour les
-premiers, par un jeton aléatoire qui expire au bout d'une heure pour les liens. Onglet **Advanced** du Proxy Host :
+s'ouvrirait. Ils restent donc ouverts, protégés par la limitation de débit
+(5 échecs par identifiant en 15 min, 20 essais par IP et par heure, 10 échecs
+par IP en 15 min sur l'admin) et par la phrase secrète pour l'admin, et par un
+jeton aléatoire qui expire au bout d'une heure pour les liens. Onglet
+**Advanced** du Proxy Host :
 
 ```nginx
 # Streamable HTTP peut ouvrir un flux SSE sur GET /mcp :
 proxy_buffering off;
 proxy_read_timeout 3600s;
 
-# Ouverts par ton navigateur : autorisation OAuth et liens de téléchargement.
-location ~ ^/(authorize|oauth/consent|downloads/[A-Za-z0-9_-]+)$ {
+# Ouverts par le navigateur : autorisation OAuth, connexion École Directe,
+# admin et liens de téléchargement.
+location ~ ^/(authorize|oauth/(login|qcm)|admin(/.*)?|downloads/[A-Za-z0-9_-]+)$ {
   include conf.d/include/proxy.conf;
 }
 
@@ -271,11 +282,12 @@ d'organisation. Le serveur implémente donc un **serveur d'autorisation OAuth
 client (RFC 7591), PKCE S256, rotation des refresh tokens, `401` avec
 `WWW-Authenticate` pointant vers les métadonnées de ressource.
 
-Comme le serveur ne dessert qu'un seul compte, l'« utilisateur » OAuth est
-toujours toi : le consentement est un écran qui demande
-`MCP_OAUTH_PASSPHRASE`. Anthropic impose un humain dans la boucle — un flux
-purement machine-à-machine n'est pas accepté. Cinq mauvaises réponses brûlent
-la demande en cours.
+Le consentement est une **connexion École Directe** (identifiant, mot de
+passe, puis le QCM si École Directe le demande) : chaque personne qui ajoute
+le connecteur se connecte avec **son** compte et n'accède qu'à **ses**
+données. Voir « Multi-utilisateur » ci-dessous. Anthropic impose un humain
+dans la boucle — un flux purement machine-à-machine n'est pas accepté. Cinq
+mauvais mots de passe brûlent la demande en cours.
 
 Clients enregistrés et jetons sont persistés sur le volume, en **empreintes
 SHA-256** : le serveur n'a jamais besoin de relire un jeton, seulement de
@@ -288,7 +300,8 @@ chaque `docker compose up`.
 Dans `.env` :
 
     MCP_PUBLIC_URL=https://ed.ton-domaine.fr/mcp
-    MCP_OAUTH_PASSPHRASE=<une phrase longue>
+    MCP_OAUTH_PASSPHRASE=<une phrase longue, pour la page d'admin>
+    SESSION_ENCRYPTION_KEY=<openssl rand -hex 32>
     MCP_ALLOWED_HOSTS=ed.ton-domaine.fr
     READ_ONLY=true
 
@@ -317,13 +330,50 @@ NPM.
 
 Ensuite, dans Claude.ai : Paramètres → Connecteurs → connecteur personnalisé,
 URL `https://ed.ton-domaine.fr/mcp`. Claude découvre le serveur
-d'autorisation, s'enregistre, et t'affiche l'écran de consentement où tu
-saisis la phrase secrète.
+d'autorisation, s'enregistre, et t'affiche la page de connexion École Directe.
+
+## Multi-utilisateur
+
+Dès qu'OAuth est activé, le serveur est multi-utilisateur. Il refuse de
+démarrer sans `SESSION_ENCRYPTION_KEY`.
+
+**Inviter quelqu'un** : envoie-lui l'URL du connecteur. Il l'ajoute dans son
+IA, se connecte avec ses identifiants École Directe, et voit « Demande
+envoyée ». Tu es prévenu par `NOTIFY_WEBHOOK_URL` si tu l'as défini (Discord,
+ou n8n pour relayer par mail, Telegram…). Sinon, les demandes t'attendent sur
+`https://ed.ton-domaine.fr/admin`. Tu valides, il relance la connexion depuis
+son IA, et c'est fait. Une demande sans réponse est supprimée au bout de
+7 jours.
+
+**Admin** (`/admin`, phrase secrète `MCP_OAUTH_PASSPHRASE`) : valider, refuser,
+révoquer. Révoquer efface le compte, ses jetons et ses téléchargements. Le
+propriétaire ne peut pas être révoqué.
+
+**Ce qui est stocké** : un fichier par utilisateur dans `/data/users/`,
+entièrement chiffré (AES-256-GCM). Les mots de passe ne sont jamais écrits :
+ils ne restent en mémoire que le temps du QCM (10 min au plus). Seuls les
+comptes **élèves** sont acceptés pour l'instant.
+
+**Le propriétaire** : au premier démarrage, `session.json` est importé comme
+compte propriétaire, déjà validé. Sur une installation neuve sans
+`session.json`, `OWNER_ED_USERNAME` désigne le propriétaire : sa première
+connexion est validée d'office. Le jeton fixe `MCP_AUTH_TOKEN` et les jetons
+OAuth émis avant le passage en multi-utilisateur correspondent au
+propriétaire, et `/health` surveille sa session.
+
+**Réparer une session** : n'importe qui peut reconnecter le connecteur depuis
+son IA, la connexion École Directe renouvelle la session. Pour le
+propriétaire, `docker compose run --rm -it ecoledirecte-mcp login` puis un
+redémarrage marche aussi : un `session.json` plus récent est réimporté.
+
+**Sauvegarde ta `SESSION_ENCRYPTION_KEY`** : sans elle, les fichiers
+utilisateurs sont illisibles et tout le monde doit se reconnecter.
 
 ## Statut
 
-stdio (local), HTTP sur tailnet, et HTTP public avec OAuth pour un connecteur
-Claude.ai sont faits. Un outil d'envoi de messages reste volontairement non
+stdio (local), HTTP sur tailnet, et HTTP public multi-utilisateur avec OAuth
+pour un connecteur Claude.ai sont faits. Les comptes parents (plusieurs
+enfants par compte) ne sont pas encore pris en charge. Un outil d'envoi de messages reste volontairement non
 implémenté.
 
 La messagerie est en **lecture seule** : lister et lire. Envoyer, répondre

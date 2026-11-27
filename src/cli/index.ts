@@ -11,6 +11,7 @@ import { runLoginFlow, type LoginIO } from './login.js';
 import { startStdioServer } from '../transport/stdio.js';
 import { MCP_PATH, startHttpServer } from '../transport/http.js';
 import { NoSessionError, SessionMonitor } from '../health/sessionMonitor.js';
+import { createMultiUser } from '../users/multiUser.js';
 
 async function promptVisible(question: string): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout });
@@ -95,20 +96,26 @@ async function runServeCommand(useHttp: boolean): Promise<void> {
   // A light real call on an interval, so /health can tell a working session
   // from a dead one. Through the full client: an expired token is refreshed
   // exactly as on a tool call, and only a session that cannot recover fails.
+  // OAuth means multi-user: each caller reaches their own session, and the
+  // single-account session above only serves the fixed-token-only setup.
+  const multiUser = config.oauth.enabled ? await createMultiUser(config, base) : undefined;
   const monitor = new SessionMonitor({
     intervalMs: config.healthCheckIntervalMs,
-    check: async () => {
-      const session = sessionBox.get();
-      if (!session) throw new NoSessionError();
-      await client.getTimeline(session);
-    },
+    check: multiUser
+      ? () => multiUser.checkOwnerSession()
+      : async () => {
+          const session = sessionBox.get();
+          if (!session) throw new NoSessionError();
+          await client.getTimeline(session);
+        },
   });
   if (config.healthCheckIntervalMs > 0) monitor.start();
 
-  const { port } = await startHttpServer(context, { monitor });
+  const { port } = await startHttpServer(context, { monitor, multiUser });
   console.error(
     `Serveur MCP HTTP à l'écoute sur http://${config.http.host}:${port}${MCP_PATH} ` +
-      `(lecture seule : ${config.readOnly}, hôtes autorisés : ${config.http.allowedHosts.join(', ')}).`,
+      `(lecture seule : ${config.readOnly}, multi-utilisateur : ${Boolean(multiUser)}, ` +
+      `hôtes autorisés : ${config.http.allowedHosts.join(', ')}).`,
   );
 }
 

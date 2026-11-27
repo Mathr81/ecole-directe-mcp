@@ -100,14 +100,17 @@ export async function startHttpServer(
   // a coarse reason when it does not, nothing that identifies the account or
   // its data. A broken session answers 503, which is what the Docker
   // healthcheck and Uptime Kuma/Gatus alert on.
-  app.get(HEALTH_PATH, (_req, res) => {
-    const session = options.monitor?.state() ?? UNKNOWN_HEALTH;
-    const failing = session.status === 'failing';
-    res.status(failing ? 503 : 200).json({
-      status: failing ? 'failing' : 'ok',
-      sessionExists: context.sessionBox.get() !== null,
-      session,
-    });
+  app.get(HEALTH_PATH, (_req, res, next) => {
+    const reply = async () => {
+      const session = options.monitor?.state() ?? UNKNOWN_HEALTH;
+      const failing = session.status === 'failing';
+      // Multi-user: the owner's session, the one the periodic check watches.
+      const sessionExists = options.multiUser
+        ? Boolean((await options.multiUser.users.owner())?.session)
+        : context.sessionBox.get() !== null;
+      res.status(failing ? 503 : 200).json({ status: failing ? 'failing' : 'ok', sessionExists, session });
+    };
+    reply().catch(next);
   });
 
   // Created once the port is bound, since the tailnet base URL depends on it.

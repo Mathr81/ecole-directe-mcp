@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TokenExpiredError } from '../../src/client/errors.js';
+import { NoSessionError } from '../../src/health/sessionMonitor.js';
 import type { DownloadResult, Session } from '../../src/client/types.js';
 import { createSessionBox } from '../../src/client/sessionBox.js';
 import { writeSession } from '../../src/store/sessionStore.js';
 import { startHttpServer, type StartHttpServerResult } from '../../src/transport/http.js';
 import type { MultiUser } from '../../src/users/multiUser.js';
-import { makeSession } from '../fakes/FakeEcoleDirecteClient.js';
 import { buildMultiUser, PerUserFake } from '../fakes/multiUserFake.js';
 
 class DownloadRecordingFake extends PerUserFake {
@@ -95,8 +95,9 @@ async function start() {
     };
     const built = await buildMultiUser(env, fake);
     mu = built.multiUser;
+    // No session in the shared context, as in production: only the owner's record has one.
     const server = await startHttpServer(
-      { client: fake, sessionBox: createSessionBox(makeSession(), async () => {}), config: built.config },
+      { client: fake, sessionBox: createSessionBox(null, async () => {}), config: built.config },
       { multiUser: mu },
     );
     if (attempt === 0) {
@@ -119,6 +120,31 @@ afterEach(async () => {
   await running?.close();
   running = null;
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('multi-user health', () => {
+  it('reports whether the owner has a session', async () => {
+    const reply = await new Promise<string>((resolve, reject) => {
+      httpRequest({ host: '127.0.0.1', port, path: '/health', agent: false }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => resolve(data));
+      })
+        .on('error', reject)
+        .end();
+    });
+    expect(JSON.parse(reply)).toMatchObject({ sessionExists: true });
+  });
+
+  it('checkOwnerSession runs a real call on the owner session, and fails without an owner', async () => {
+    const calls = fake.callCounts.getTimeline ?? 0;
+    await mu.checkOwnerSession();
+    expect(fake.callCounts.getTimeline).toBe(calls + 1);
+
+    await mu.users.delete((await mu.users.owner())!.userId);
+    mu.runtimes.forget(mu.users.idFor('moi'));
+    await expect(mu.checkOwnerSession()).rejects.toBeInstanceOf(NoSessionError);
+  });
 });
 
 describe('multi-user MCP requests', () => {

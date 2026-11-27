@@ -6,6 +6,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Config } from '../config.js';
 import type { EcoleDirecteClient } from '../client/types.js';
+import { NoSessionError } from '../health/sessionMonitor.js';
 import { createNotifier, type Notifier } from '../notify/webhook.js';
 import { OAuthStore } from '../oauth/store.js';
 import { deriveKeys, type Keys } from '../store/secretBox.js';
@@ -24,6 +25,8 @@ export interface MultiUser {
   ownerUsername: string;
   /** Rejected or revoked: record, OAuth tokens, cached runtime and downloads all go. */
   removeUser(userId: string): Promise<void>;
+  /** The /health probe: one light real call on the owner's session, never anyone else's. */
+  checkOwnerSession(): Promise<void>;
 }
 
 export const MISSING_KEY_MESSAGE =
@@ -59,6 +62,13 @@ export async function createMultiUser(
     loginClient: base,
     notify: createNotifier(config.multiUser.notifyWebhookUrl, options.fetchImpl),
     ownerUsername: config.multiUser.ownerUsername,
+    async checkOwnerSession() {
+      const owner = await users.owner();
+      const runtime = owner ? await runtimes.get(owner.userId) : null;
+      const session = runtime?.sessionBox.get();
+      if (!runtime || !session) throw new NoSessionError();
+      await runtime.client.getTimeline(session);
+    },
     async removeUser(userId) {
       await users.delete(userId);
       await oauthStore.revokeUser(userId);
