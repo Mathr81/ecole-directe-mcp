@@ -203,6 +203,26 @@ afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
+describe('home page and static files', () => {
+  it('the home page gives the address to paste in Claude and the tutorial', async () => {
+    const { port } = await start();
+    const home = await request(port, '/');
+    expect(home.status).toBe(200);
+    expect(home.headers['content-type']).toContain('text/html');
+    expect(home.body).toContain(`data-copy="${publicUrl}"`);
+    expect(home.body).toContain('Le tuto, en 5 étapes');
+  });
+
+  it('serves the stylesheet and the fonts, and nothing outside public/', async () => {
+    const { port } = await start();
+    const css = await request(port, '/static/app.css');
+    expect(css.status).toBe(200);
+    expect(css.headers['content-type']).toContain('text/css');
+    expect((await request(port, '/static/fonts/figtree-latin.woff2')).status).toBe(200);
+    expect((await request(port, '/static/..%2Fpackage.json')).status).toBe(404);
+  });
+});
+
 describe('OAuth discovery', () => {
   it('advertises protected resource metadata matching the MCP URL exactly', async () => {
     // Claude compares this against the URL the user typed, path included.
@@ -283,6 +303,7 @@ describe('OAuth authorization code flow', () => {
     expect(login.status).toBe(401);
     expect(login.headers.location).toBeUndefined();
     expect(login.body).toContain('Identifiant ou mot de passe incorrect.');
+    expect(multiUser.activity.events().map((e) => e.type)).toEqual(['login_failed']);
   });
 
   it('rejects a mismatched PKCE verifier', async () => {
@@ -420,6 +441,7 @@ describe('multi-user login', () => {
     expect(webhookCalls[0]).toContain('ami');
     expect(webhookCalls[0]).toContain(`127.0.0.1:${port}/admin`);
     expect((await multiUser.users.findByUsername('ami'))!.status).toBe('pending');
+    expect(multiUser.activity.events()).toMatchObject([{ type: 'request', userId: multiUser.users.idFor('ami') }]);
   });
 
   it('a pending user logging in again sees still pending', async () => {
@@ -443,6 +465,7 @@ describe('multi-user login', () => {
     const token = await connect(port, 'ami');
 
     expect((await multiUser.oauthStore.findAccessToken(token))!.userId).toBe(multiUser.users.idFor('ami'));
+    expect(multiUser.activity.events().map((e) => e.type)).toContain('login');
   });
 
   it('reconnecting an approved user keeps the same userId and both tokens work', async () => {

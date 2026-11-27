@@ -10,7 +10,16 @@ import express, { type Express, type Request, type Response } from 'express';
 import { hmacHex } from '../store/secretBox.js';
 import { RateLimiter } from '../transport/rateLimiter.js';
 import type { MultiUser } from '../users/multiUser.js';
-import { renderAdminList, renderAdminLogin } from './adminPages.js';
+import type { HealthState } from '../health/sessionMonitor.js';
+import {
+  parseJournalFilter,
+  renderAdminLogin,
+  renderDashboard,
+  renderJournal,
+  renderUserDetail,
+  renderUsers,
+  safeBack,
+} from './adminPages.js';
 
 const COOKIE = 'ed_admin';
 const SESSION_MS = 12 * 60 * 60 * 1000;
@@ -19,6 +28,9 @@ export interface AdminOptions {
   multiUser: MultiUser;
   passphrase: string;
   secureCookie: boolean;
+  readOnly: boolean;
+  /** Last result of the periodic check of the owner's session. */
+  health?: () => HealthState;
   now?: () => number;
 }
 
@@ -39,6 +51,7 @@ function readCookie(req: Request, name: string): string | undefined {
 export function mountAdmin(app: Express, options: AdminOptions): void {
   const { multiUser, passphrase, secureCookie } = options;
   const now = options.now ?? Date.now;
+  const startedAt = now();
   const failures = new RateLimiter(10, 15 * 60 * 1000, now);
   const cookieFlags = `Path=/admin; HttpOnly; SameSite=Strict${secureCookie ? '; Secure' : ''}`;
 
@@ -56,19 +69,56 @@ export function mountAdmin(app: Express, options: AdminOptions): void {
 
   const form = express.urlencoded({ extended: false, limit: '4kb' });
 
-  app.get('/admin', async (req, res, next) => {
-    try {
-      if (!signedIn(req)) {
-        html(res, 200, renderAdminLogin());
-        return;
+  /** Every admin page: the login form until the cookie is there. */
+  function adminPage(path: string, render: (req: Request, res: Response) => Promise<string>): void {
+    app.get(path, async (req, res, next) => {
+      try {
+        if (!signedIn(req)) {
+          html(res, 200, renderAdminLogin());
+          return;
+        }
+        await multiUser.users.purgeExpiredPending();
+        const body = await render(req, res);
+        html(res, res.statusCode, body);
+      } catch (error) {
+        next(error);
       }
-      await multiUser.users.purgeExpiredPending();
-      const users = await multiUser.users.list();
-      html(res, 200, renderAdminList(users, users.some((user) => user.isOwner)));
-    } catch (error) {
-      next(error);
+    });
+  }
+
+  adminPage('/admin', async () =>
+    renderDashboard({
+      users: await multiUser.users.list(),
+      events: multiUser.activity.events(),
+      now: now(),
+      health: options.health?.() ?? null,
+      startedAt,
+      readOnly: options.readOnly,
+    }),
+  );
+
+  adminPage('/admin/users', async () => renderUsers(await multiUser.users.list(), multiUser.activity.events(), now()));
+
+  adminPage('/admin/users/:userId', async (req, res) => {
+    const users = await multiUser.users.list();
+    const user = users.find((candidate) => candidate.userId === req.params.userId);
+    if (!user) {
+      // Gone (rejected, revoked, expired): the list, with the right status.
+      res.status(404);
+      return renderUsers(users, multiUser.activity.events(), now());
     }
+    return renderUserDetail(user, users, multiUser.activity.events(), now());
   });
+
+  adminPage('/admin/activity', async (req) =>
+    renderJournal(
+      await multiUser.users.list(),
+      multiUser.activity.events(),
+      now(),
+      parseJournalFilter(req.query.kind),
+      typeof req.query.user === 'string' ? req.query.user : '',
+    ),
+  );
 
   app.post('/admin/login', form, (req, res) => {
     const ip = req.ip ?? '';
@@ -104,13 +154,19 @@ export function mountAdmin(app: Express, options: AdminOptions): void {
       if (user && !user.isOwner) {
         if (verb === 'approve' && user.status === 'pending') {
           await multiUser.users.save({ ...user, status: 'approved', approvedAt: new Date(now()).toISOString() });
+          await multiUser.activity.record({ type: 'approved', userId });
         } else if (verb === 'reject' && user.status === 'pending') {
           await multiUser.removeUser(userId);
+          // No userId: a removed user leaves no trace, only the count remains.
+          await multiUser.activity.record({ type: 'rejected' });
         } else if (verb === 'revoke' && user.status === 'approved') {
           await multiUser.removeUser(userId);
+          await multiUser.activity.record({ type: 'revoked' });
         }
       }
-      res.redirect(303, '/admin');
+      // A removed user has no page left to come back to.
+      const back = safeBack((req.body as { back?: string }).back);
+      res.redirect(303, back.startsWith('/admin/users/') && !(await multiUser.users.get(userId)) ? '/admin/users' : back);
     } catch (error) {
       next(error);
     }

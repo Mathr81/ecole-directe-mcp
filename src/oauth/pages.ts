@@ -1,72 +1,40 @@
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+/** Pages of the connection flow: what a friend sees after clicking "Se connecter" in their AI. */
+import { brand, escapeHtml, icon, page, type IconName } from '../ui/html.js';
+
+export { escapeHtml };
+
+type Step = 'login' | 'waiting' | 'ready';
+
+/** The three moments of a first connection, so nobody wonders what comes next. */
+function steps(current: Step): string {
+  const order: Step[] = ['login', 'waiting', 'ready'];
+  const labels: Record<Step, string> = { login: 'Connexion', waiting: 'Validation', ready: "C'est prêt" };
+  const at = order.indexOf(current);
+  const items = order.map((step, index) => {
+    const state =
+      index < at ? 'is-done' : index > at ? '' : current === 'waiting' ? 'is-current is-waiting' : 'is-current';
+    return `<li class="${state}"${index === at ? ' aria-current="step"' : ''}>${labels[step]}</li>`;
+  });
+  return `<ol class="steps" aria-label="Étapes">${items.join('')}</ol>`;
 }
 
-/**
- * Pages of the login flow and of the admin, sharing one stylesheet.
- *
- * Self-contained on purpose: no external stylesheet, script or font, so the
- * pages work with any content-security policy and leak nothing to a CDN.
- * Every value interpolated below that is not a constant goes through
- * `escapeHtml` — client names and display names are untrusted.
- */
-export function renderShell(title: string, body: string, options: { wide?: boolean } = {}): string {
-  return `<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} — École Directe MCP</title>
-<style>
-  :root { color-scheme: light dark; --bg:#f6f6f7; --fg:#1a1a1a; --muted:#5c5c5c; --card:#fff; --line:#e0e0e2; --accent:#2f6feb; --err:#b3261e; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#17171a; --fg:#ececee; --muted:#a0a0a6; --card:#212125; --line:#34343a; --accent:#6b9bff; --err:#f2b8b5; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
-         background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  main { width:100%; max-width:26rem; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:28px; }
-  h1 { margin:0 0 6px; font-size:1.15rem; }
-  p { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
-  strong { color:var(--fg); }
-  label { display:block; font-size:.875rem; font-weight:600; margin-bottom:6px; }
-  input { width:100%; padding:11px 12px; font-size:1rem; border-radius:9px; border:1px solid var(--line);
-          background:var(--bg); color:var(--fg); }
-  input:focus { outline:2px solid var(--accent); outline-offset:1px; }
-  button { width:100%; margin-top:16px; padding:11px 12px; font-size:1rem; font-weight:600; border:0;
-           border-radius:9px; background:var(--accent); color:#fff; cursor:pointer; }
-  .error { margin:0 0 16px; padding:10px 12px; border-radius:9px; font-size:.875rem;
-           background:color-mix(in srgb, var(--err) 14%, transparent); color:var(--err); }
-  ul { margin:0 0 18px; padding-left:1.1rem; color:var(--muted); font-size:.875rem; }
-  label + input { margin-bottom:12px; }
-  .choice { display:flex; gap:10px; align-items:center; font-weight:400; padding:10px 12px; margin:0 0 8px;
-            border:1px solid var(--line); border-radius:9px; cursor:pointer; }
-  .choice input { width:auto; margin:0; }
-  .notice { font-size:.8rem; margin:16px 0 0; }
-  table { width:100%; border-collapse:collapse; font-size:.875rem; }
-  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
-  td form { display:inline; }
-  td button { width:auto; margin:0 4px 4px 0; padding:6px 10px; font-size:.8rem; }
-  button.secondary { background:transparent; color:var(--fg); border:1px solid var(--line); }
-  main.wide { max-width:52rem; }
-</style>
-</head>
-<body>
-<main${options.wide ? ' class="wide"' : ''}>
-${body}
-</main>
-</body>
-</html>`;
+function flow(title: string, inner: string, foot = ''): string {
+  return page({
+    title,
+    body: `<main class="flow"><div class="flow-inner">
+${brand()}
+${inner}
+${foot ? `<div class="flow-foot">${foot}</div>` : ''}
+</div></main>`,
+  });
 }
 
-function errorBlock(error?: string): string {
-  return error ? `<p class="error">${escapeHtml(error)}</p>` : '';
+function note(tone: 'error' | 'warning', text: string): string {
+  return `<div class="note is-${tone}" role="${tone === 'error' ? 'alert' : 'status'}">${icon('alert')}<p>${text}</p></div>`;
 }
+
+const PRIVACY = `<p>Ce serveur garde ta session École Directe chiffrée, jamais ton mot de passe. Tes données passent par l'IA que tu connectes. Le propriétaire du serveur gère les accès : demande-lui pour être supprimé.</p>
+<p><a href="/">Comment ça marche ?</a></p>`;
 
 export interface LoginPageOptions {
   pendingId: string;
@@ -84,27 +52,33 @@ const KNOWN_REDIRECT_HOSTS = ['claude.ai', 'claude.com'];
 export function renderLoginPage({ pendingId, clientName, redirectHost, action, error }: LoginPageOptions): string {
   const warning = KNOWN_REDIRECT_HOSTS.includes(redirectHost)
     ? ''
-    : `<p class="error">Attention : ce n'est pas Claude. Ne te connecte que si tu as toi-même ajouté ce connecteur dans ton IA.</p>`;
-  return renderShell(
+    : note('warning', "<strong>Attention : ce n'est pas Claude.</strong> Ne te connecte que si tu as toi-même ajouté ce connecteur dans ton IA.");
+  return flow(
     'Connexion',
-    `<h1>Connexion à École Directe</h1>
-  <p><strong>${escapeHtml(clientName)}</strong> demande à lire tes données École Directe via ce serveur.</p>
-  <ul>
-    <li>Notes, devoirs, emploi du temps, vie scolaire</li>
-    <li>Messagerie : lecture seule</li>
-  </ul>
-  <p>Après la connexion, tu seras renvoyé vers <strong>${escapeHtml(redirectHost)}</strong>.</p>
+    `${steps('login')}
+<section class="panel" aria-labelledby="title">
+  <h1 id="title">Connecte-toi à École Directe</h1>
+  <div class="who">${icon('plug')}<p><strong>${escapeHtml(clientName)}</strong> demande à lire ton compte. Après la connexion, tu seras renvoyé vers <strong>${escapeHtml(redirectHost)}</strong>.</p></div>
   ${warning}
-  ${errorBlock(error)}
-  <form method="post" action="${escapeHtml(action)}">
+  ${error ? note('error', escapeHtml(error)) : ''}
+  <form method="post" action="${escapeHtml(action)}" data-busy="Connexion à École Directe…">
     <input type="hidden" name="pending" value="${escapeHtml(pendingId)}">
-    <label for="username">Identifiant École Directe</label>
-    <input id="username" name="username" autocomplete="username" autocapitalize="none" autofocus required>
-    <label for="password">Mot de passe</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Se connecter</button>
+    <div class="field">
+      <label for="username">Identifiant École Directe</label>
+      <input class="input" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required>
+    </div>
+    <div class="field">
+      <label for="password">Mot de passe</label>
+      <div class="password">
+        <input class="input" id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="button" class="reveal" data-reveal="password" aria-pressed="false" hidden>Afficher</button>
+      </div>
+    </div>
+    <button class="btn is-block" type="submit">Se connecter</button>
   </form>
-  <p class="notice">Ce serveur garde ta session École Directe chiffrée, jamais ton mot de passe. Tes données passent par l'IA que tu connectes. Le propriétaire du serveur gère les accès : demande-lui pour être supprimé.</p>`,
+</section>`,
+    `<p><strong>Ce que ton IA pourra lire :</strong> notes et moyennes, devoirs, emploi du temps, vie scolaire, documents, et ta messagerie en lecture seule.</p>
+${PRIVACY}`,
   );
 }
 
@@ -122,20 +96,58 @@ export function renderTwoFactorPage({ pendingId, question, propositions, action,
       (proposition, index) =>
         `<label class="choice"><input type="radio" name="answer" value="${escapeHtml(proposition)}"${index === 0 ? ' required' : ''}> ${escapeHtml(proposition)}</label>`,
     )
-    .join('\n    ');
-  return renderShell(
+    .join('\n      ');
+  return flow(
     'Question de sécurité',
-    `<h1>Question de sécurité École Directe</h1>
-  <p>${escapeHtml(question)}</p>
-  ${errorBlock(error)}
-  <form method="post" action="${escapeHtml(action)}">
+    `${steps('login')}
+<section class="panel" aria-labelledby="title">
+  <h1 id="title">Une dernière question</h1>
+  <p>École Directe vérifie que c'est bien toi, comme sur l'appli.</p>
+  ${error ? note('error', escapeHtml(error)) : ''}
+  <form method="post" action="${escapeHtml(action)}" data-busy="Vérification…">
     <input type="hidden" name="pending" value="${escapeHtml(pendingId)}">
-    ${choices}
-    <button type="submit">Valider</button>
-  </form>`,
+    <fieldset class="choices">
+      <legend class="field"><strong>${escapeHtml(question)}</strong></legend>
+      ${choices}
+    </fieldset>
+    <button class="btn is-block" type="submit">Valider ma réponse</button>
+  </form>
+</section>`,
+    PRIVACY,
   );
 }
 
-export function renderMessagePage({ title, message }: { title: string; message: string }): string {
-  return renderShell(title, `<h1>${escapeHtml(title)}</h1>\n  <p>${escapeHtml(message)}</p>`);
+export type MessageTone = 'error' | 'pending' | 'info';
+
+export interface MessagePageOptions {
+  title: string;
+  message: string;
+  /** `pending` shows where the request stands; `error` offers the way back. */
+  tone?: MessageTone;
+}
+
+const EMBLEMS: Record<MessageTone, { glyph: IconName; fill: string }> = {
+  pending: { glyph: 'hourglass', fill: '#ffd23f' },
+  error: { glyph: 'alert', fill: '#ffe7e2' },
+  info: { glyph: 'school', fill: '#dfe5f7' },
+};
+
+export function renderMessagePage({ title, message, tone = 'info' }: MessagePageOptions): string {
+  const { glyph, fill } = EMBLEMS[tone];
+  const inner = icon(glyph).replace(/^<svg[^>]*>|<\/svg>$/g, '');
+  const art = `<svg class="big-emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="29" fill="${fill}" stroke="#14193a" stroke-width="3"/><g transform="translate(16 16) scale(1.33)" fill="none" stroke="#14193a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</g></svg>`;
+  const next =
+    tone === 'pending'
+      ? `<p class="muted small">Rien d'autre à faire pour l'instant, tu peux fermer cette page.</p>`
+      : `<p><a class="btn is-ghost" href="/">Revoir le tuto</a></p>`;
+  return flow(
+    title,
+    `${tone === 'pending' ? steps('waiting') : ''}
+<section class="panel" aria-labelledby="title">
+  ${art}
+  <h1 id="title">${escapeHtml(title)}</h1>
+  <p>${escapeHtml(message)}</p>
+  ${next}
+</section>`,
+  );
 }

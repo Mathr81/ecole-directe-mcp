@@ -14,6 +14,15 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
   await rename(tmpPath, path);
 }
 
+/** Same guarantee for a JSON Lines file: one value per line. */
+export async function writeJsonLinesAtomic(path: string, values: unknown[]): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmpPath = `${path}.${randomUUID()}.tmp`;
+  const body = values.map((value) => JSON.stringify(value)).join('\n');
+  await writeFile(tmpPath, body ? `${body}\n` : '', { encoding: 'utf8', mode: 0o600 });
+  await rename(tmpPath, path);
+}
+
 /** Returns `fallback` when the file is missing or unparseable. */
 export async function readJsonOrDefault<T>(path: string, fallback: T): Promise<T> {
   try {
