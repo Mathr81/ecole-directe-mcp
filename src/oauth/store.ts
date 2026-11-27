@@ -20,6 +20,8 @@ export interface StoredCode {
   redirectUri: string;
   scopes: string[];
   resource?: string;
+  /** Absent on codes issued before multi-user mode: they belong to the owner. */
+  userId?: string;
   expiresAt: number;
 }
 
@@ -27,8 +29,13 @@ export interface StoredToken {
   clientId: string;
   scopes: string[];
   resource?: string;
+  /** Absent on tokens issued before multi-user mode: they belong to the owner. */
+  userId?: string;
   expiresAt: number;
 }
+
+/** Claude registers a client on every new connection; an unused one is dropped after a day. */
+const UNUSED_CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface StoreShape {
   clients: Record<string, OAuthClientInformationFull>;
@@ -73,6 +80,15 @@ export class OAuthStore {
       for (const [key, entry] of Object.entries(bucket)) {
         if (entry.expiresAt <= now) delete bucket[key];
       }
+    }
+    const used = new Set(
+      [this.state.codes, this.state.accessTokens, this.state.refreshTokens].flatMap((bucket) =>
+        Object.values(bucket).map((entry) => entry.clientId),
+      ),
+    );
+    for (const [id, client] of Object.entries(this.state.clients)) {
+      const issuedAtMs = (client.client_id_issued_at ?? 0) * 1000;
+      if (!used.has(id) && issuedAtMs + UNUSED_CLIENT_TTL_MS <= now) delete this.state.clients[id];
     }
   }
 
@@ -156,6 +172,16 @@ export class OAuthStore {
       const entry = this.state.refreshTokens[key];
       delete this.state.refreshTokens[key];
       return entry && entry.expiresAt > this.now() ? entry : undefined;
+    });
+  }
+
+  async revokeUser(userId: string): Promise<void> {
+    await this.mutate(() => {
+      for (const bucket of [this.state.codes, this.state.accessTokens, this.state.refreshTokens]) {
+        for (const [key, entry] of Object.entries(bucket)) {
+          if (entry.userId === userId) delete bucket[key];
+        }
+      }
     });
   }
 

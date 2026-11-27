@@ -14,15 +14,18 @@
  * be, or the server refuses to start.
  */
 import type { Server } from 'node:http';
+import { join } from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { buildServer, type ToolContext } from '../mcp/server.js';
-import { CONSENT_PATH, EcoleDirecteOAuthProvider, SUPPORTED_SCOPES } from '../oauth/provider.js';
-import { OAuthStore } from '../oauth/store.js';
+import { EcoleDirecteOAuthProvider, LOGIN_PATH, SUPPORTED_SCOPES, TWO_FACTOR_PATH } from '../oauth/provider.js';
+import { MISSING_KEY_MESSAGE, type MultiUser } from '../users/multiUser.js';
+import { mountAdmin } from '../admin/admin.js';
 import { isAuthorized } from './httpAuth.js';
 import { DOWNLOAD_PATH_PREFIX, DownloadLinks } from './downloadLinks.js';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { HealthState, SessionMonitor } from '../health/sessionMonitor.js';
 
 export const MCP_PATH = '/mcp';
@@ -62,6 +65,8 @@ async function handleMcp(
 export interface StartHttpServerOptions {
   /** Last result of the periodic session check; without one, /health reports `unknown`. */
   monitor?: Pick<SessionMonitor, 'state'>;
+  /** Required when OAuth is enabled: OAuth means multi-user. */
+  multiUser?: MultiUser;
 }
 
 const UNKNOWN_HEALTH: HealthState = { status: 'unknown', reason: null, since: null, checkedAt: null };
@@ -73,6 +78,7 @@ export async function startHttpServer(
   const { host, port, authToken } = context.config.http;
   const oauth = context.config.oauth;
 
+  if (oauth.enabled && !options.multiUser) throw new Error(MISSING_KEY_MESSAGE);
   if (!authToken && !oauth.enabled) {
     throw new Error(
       "Le transport HTTP n'a aucun moyen d'authentifier ses appelants. Définis MCP_AUTH_TOKEN " +
@@ -94,14 +100,17 @@ export async function startHttpServer(
   // a coarse reason when it does not, nothing that identifies the account or
   // its data. A broken session answers 503, which is what the Docker
   // healthcheck and Uptime Kuma/Gatus alert on.
-  app.get(HEALTH_PATH, (_req, res) => {
-    const session = options.monitor?.state() ?? UNKNOWN_HEALTH;
-    const failing = session.status === 'failing';
-    res.status(failing ? 503 : 200).json({
-      status: failing ? 'failing' : 'ok',
-      sessionExists: context.sessionBox.get() !== null,
-      session,
-    });
+  app.get(HEALTH_PATH, (_req, res, next) => {
+    const reply = async () => {
+      const session = options.monitor?.state() ?? UNKNOWN_HEALTH;
+      const failing = session.status === 'failing';
+      // Multi-user: the owner's session, the one the periodic check watches.
+      const sessionExists = options.multiUser
+        ? Boolean((await options.multiUser.users.owner())?.session)
+        : context.sessionBox.get() !== null;
+      res.status(failing ? 503 : 200).json({ status: failing ? 'failing' : 'ok', sessionExists, session });
+    };
+    reply().catch(next);
   });
 
   // Created once the port is bound, since the tailnet base URL depends on it.
@@ -125,19 +134,40 @@ export async function startHttpServer(
   });
 
   let oauthGuard: ReturnType<typeof requireBearerAuth> | undefined;
+  let resourceMetadataUrl = '';
 
-  if (oauth.enabled) {
-    const provider = new EcoleDirecteOAuthProvider({
-      store: new OAuthStore(oauth.storePath),
-      passphrase: oauth.passphrase,
-      resourceUrl: oauth.publicUrl,
-    });
+  if (oauth.enabled && options.multiUser) {
     const resourceUrl = new URL(oauth.publicUrl);
     const issuerUrl = new URL(resourceUrl.origin);
+    const provider = new EcoleDirecteOAuthProvider({
+      multiUser: options.multiUser,
+      resourceUrl: oauth.publicUrl,
+      adminUrl: new URL('/admin', resourceUrl.origin).href,
+    });
 
-    app.post(CONSENT_PATH, express.urlencoded({ extended: false }), (req, res, next) => {
-      const body = req.body as { pending?: string; passphrase?: string };
-      provider.handleConsent(res, body.pending ?? '', body.passphrase ?? '').catch(next);
+    mountAdmin(app, {
+      multiUser: options.multiUser,
+      passphrase: oauth.passphrase,
+      secureCookie: resourceUrl.protocol === 'https:',
+    });
+
+    const form = express.urlencoded({ extended: false, limit: '16kb' });
+    app.post(LOGIN_PATH, form, (req, res, next) => {
+      const body = req.body as { pending?: string; username?: string; password?: string };
+      provider
+        .handleLogin(res, {
+          pending: String(body.pending ?? ''),
+          username: String(body.username ?? ''),
+          password: String(body.password ?? ''),
+          ip: req.ip ?? '',
+        })
+        .catch(next);
+    });
+    app.post(TWO_FACTOR_PATH, form, (req, res, next) => {
+      const body = req.body as { pending?: string; answer?: string };
+      provider
+        .handleTwoFactor(res, { pending: String(body.pending ?? ''), answer: String(body.answer ?? ''), ip: req.ip ?? '' })
+        .catch(next);
     });
 
     // Must be mounted at the application root: it owns /authorize, /token,
@@ -152,11 +182,12 @@ export async function startHttpServer(
       }),
     );
 
+    resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceUrl);
     oauthGuard = requireBearerAuth({
       verifier: provider,
       // Points Claude at the protected resource metadata from the 401, which
       // is the handshake that tells it where the authorization server is.
-      resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceUrl),
+      resourceMetadataUrl,
     });
   }
 
@@ -164,6 +195,7 @@ export async function startHttpServer(
     // The fixed token short-circuits; anything else falls through to OAuth so
     // Claude still receives a spec-shaped 401 with WWW-Authenticate.
     if (authToken && isAuthorized(req.headers.authorization, authToken)) {
+      res.locals.fixedToken = true;
       next();
       return;
     }
@@ -179,8 +211,40 @@ export async function startHttpServer(
   // `host:0` entry would reject every request.
   let allowedHosts = context.config.http.allowedHosts;
 
+  /**
+   * Multi-user: the context of the user the credential belongs to. The fixed
+   * token and tokens issued before multi-user mode (no userId) are the owner's.
+   */
+  async function userContext(req: Request, res: Response): Promise<ToolContext | null> {
+    const multiUser = options.multiUser as MultiUser;
+    const tokenUserId = (req as Request & { auth?: AuthInfo }).auth?.extra?.userId;
+    const userId =
+      typeof tokenUserId === 'string' && !res.locals.fixedToken ? tokenUserId : (await multiUser.users.owner())?.userId;
+    const runtime = userId ? await multiUser.runtimes.get(userId) : null;
+    if (!runtime) {
+      // Pending, rejected or removed: the token must stop working for good.
+      if (typeof tokenUserId === 'string') await multiUser.oauthStore.revokeUser(tokenUserId);
+      res
+        .status(401)
+        .set('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${resourceMetadataUrl}"`)
+        .json({ error: 'invalid_token' });
+      return null;
+    }
+    return {
+      ...context,
+      client: runtime.client,
+      sessionBox: runtime.sessionBox,
+      config: { ...context.config, downloadDir: join(context.config.downloadDir, runtime.userId) },
+      downloadLinks,
+    };
+  }
+
   app.all(MCP_PATH, express.json({ limit: '4mb' }), authenticate, (req, res, next) => {
-    handleMcp({ ...context, downloadLinks }, allowedHosts, req, res).catch(next);
+    const run = async () => {
+      const toolContext = options.multiUser ? await userContext(req, res) : { ...context, downloadLinks };
+      if (toolContext) await handleMcp(toolContext, allowedHosts, req, res);
+    };
+    run().catch(next);
   });
 
   app.use((_req, res) => {

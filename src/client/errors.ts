@@ -114,6 +114,15 @@ export interface WithAutoRefreshOptions {
   now?: () => number;
 }
 
+function isAuthRejection(error: unknown): boolean {
+  return (
+    error instanceof TokenExpiredError ||
+    error instanceof InvalidCredentialsError ||
+    error instanceof PossiblyExpiredSessionError ||
+    error instanceof TwoFactorRequiredError
+  );
+}
+
 export function withAutoRefresh(
   client: EcoleDirecteClient,
   sessionBox: SessionBox,
@@ -168,8 +177,11 @@ export function withAutoRefresh(
       let refreshed: Session;
       try {
         refreshed = await refreshOnce(currentSession);
-      } catch {
-        throw new AuthenticationRequiredError();
+      } catch (refreshError) {
+        // Only École Directe refusing the credential means a new login is
+        // needed; an outage is rethrown as is, so nobody gets logged out for it.
+        if (isAuthRejection(refreshError)) throw new AuthenticationRequiredError();
+        throw refreshError;
       }
       try {
         return await fn(refreshed);

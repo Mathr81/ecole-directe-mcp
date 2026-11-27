@@ -55,16 +55,29 @@ describe('withAutoRefresh', () => {
     expect(box.get()!.token).toBe('new-token');
   });
 
-  it('throws AuthenticationRequiredError without looping when refresh also fails', async () => {
+  it('throws AuthenticationRequiredError without looping when refresh is rejected', async () => {
     const fake = new FakeEcoleDirecteClient();
     fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
-    fake.queueFailure('refreshSession', new Error('refresh failed'));
+    fake.queueFailure('refreshSession', new TokenExpiredError(526, 'session invalide'));
     const box = createSessionBox(makeSession(), async () => {});
     const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
 
     await expect(client.getGrades(box.get()!)).rejects.toBeInstanceOf(AuthenticationRequiredError);
     expect(fake.callCounts.getGrades).toBe(1);
     expect(fake.callCounts.refreshSession).toBe(1);
+  });
+
+  it('rethrows a refresh that fails for another reason (network, maintenance) unchanged', async () => {
+    // Not an authentication verdict: in multi-user mode AuthenticationRequiredError
+    // revokes the user's tokens, which an outage must never do.
+    const fake = new FakeEcoleDirecteClient();
+    const outage = new Error('fetch failed');
+    fake.queueFailure('getGrades', new TokenExpiredError(525, 'expired'));
+    fake.queueFailure('refreshSession', outage);
+    const box = createSessionBox(makeSession(), async () => {});
+    const client = withAutoRefresh(fake, box, { maxAgeMs: Number.POSITIVE_INFINITY });
+
+    await expect(client.getGrades(box.get()!)).rejects.toBe(outage);
   });
 
   it('deduplicates concurrent refreshes triggered by parallel calls', async () => {
