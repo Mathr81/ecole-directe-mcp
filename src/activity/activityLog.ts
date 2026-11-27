@@ -37,8 +37,11 @@ export interface ActivityLogOptions {
 
 const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_EVENTS = 20_000;
+const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
 
 export class ActivityLog {
+  private lastPrune = 0;
+
   private constructor(
     private readonly path: string,
     private list: ActivityEvent[],
@@ -72,6 +75,7 @@ export class ActivityLog {
       }
     }
     if (log.trim() || skipped) await log.rewrite();
+    log.lastPrune = now();
     return log;
   }
 
@@ -83,8 +87,12 @@ export class ActivityLog {
   async record(event: Omit<ActivityEvent, 'at'>): Promise<void> {
     const full: ActivityEvent = { at: new Date(this.now()).toISOString(), ...event };
     this.list.push(full);
+    // Rewriting the whole file on every call would be wasteful: prune once a
+    // day, or when the cap is overshot by a tenth.
+    const due = this.now() - this.lastPrune >= PRUNE_EVERY_MS || this.list.length > this.maxEvents * 1.1;
+    if (due) this.lastPrune = this.now();
     try {
-      if (this.trim()) {
+      if (due && this.trim()) {
         await this.rewrite();
       } else {
         await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });

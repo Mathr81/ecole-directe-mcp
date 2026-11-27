@@ -1,14 +1,13 @@
 // Small enhancements only: every page works without this file.
 document.documentElement.classList.add('js');
 
+// The live region exists before anything is said in it, so screen readers announce it.
+const box = document.createElement('div');
+box.className = 'toast';
+box.setAttribute('role', 'status');
+document.body.append(box);
+
 function toast(text) {
-  let box = document.querySelector('.toast');
-  if (!box) {
-    box = document.createElement('div');
-    box.className = 'toast';
-    box.setAttribute('role', 'status');
-    document.body.append(box);
-  }
   box.textContent = text;
   box.classList.add('is-shown');
   clearTimeout(box.hideTimer);

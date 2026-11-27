@@ -40,7 +40,7 @@ const BRAND_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true" class="brand-mark
 const FAVICON = `data:image/svg+xml;base64,${Buffer.from(BRAND_SVG.replace(' aria-hidden="true" class="brand-mark"', ' xmlns="http://www.w3.org/2000/svg"'), 'utf8').toString('base64')}`;
 
 export function brand(href = '/'): string {
-  return `<a class="brand" href="${href}">${BRAND_SVG}<span>École Directe MCP</span></a>`;
+  return `<a class="brand" href="${href}">${BRAND_SVG}<span translate="no">École Directe MCP</span></a>`;
 }
 
 export interface PageOptions {

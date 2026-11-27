@@ -76,7 +76,7 @@ export function renderLanding({ mcpUrl, readOnly }: LandingOptions): string {
       <h3>Ajoute le connecteur</h3>
       <p class="path">Paramètres <span aria-hidden="true">›</span> Connecteurs <span aria-hidden="true">›</span> Ajouter un connecteur personnalisé</p>
       <p>Donne-lui un nom (par exemple <em>École Directe</em>) et colle cette adresse dans le champ de l'URL :</p>
-      <div class="copy"><span class="url">${url}</span>${copyButton(mcpUrl, 'Copier', 'Adresse copiée')}</div>
+      <div class="copy"><span class="url" translate="no">${url}</span>${copyButton(mcpUrl, 'Copier', 'Adresse copiée')}</div>
       <p class="muted small">Laisse les paramètres avancés vides, puis clique sur <span class="kbd">Ajouter</span>.</p>
     </div></li>
     <li><span class="num" aria-hidden="true">3</span><div class="body">

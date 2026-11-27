@@ -60,6 +60,22 @@ describe('ActivityLog', () => {
     expect(log.events().map((e) => e.tool)).toEqual(['t2', 't3', 't4']);
   });
 
+  it('prunes at most once a day, so a busy server does not rewrite the file on every call', async () => {
+    const path = join(dir, 'activity.jsonl');
+    const almostOld = new Date(now - 30 * DAY + 60_000).toISOString();
+    await writeFile(path, `${JSON.stringify({ at: almostOld, type: 'login' })}\n`);
+    const log = await ActivityLog.open(path, { now: () => now });
+
+    now += 2 * 60_000; // the first event is now past 30 days
+    await log.record({ type: 'login' });
+    expect((await readFile(path, 'utf8')).trim().split('\n')).toHaveLength(2);
+
+    now += DAY;
+    await log.record({ type: 'login' });
+    expect((await readFile(path, 'utf8')).trim().split('\n')).toHaveLength(2);
+    expect(log.events().map((e) => e.at)).not.toContain(almostOld);
+  });
+
   it('forget removes every event of a user', async () => {
     const path = join(dir, 'activity.jsonl');
     const log = await ActivityLog.open(path, { now: () => now });

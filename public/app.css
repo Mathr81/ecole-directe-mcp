@@ -48,6 +48,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 img, svg { display: block; }
+a, button, .choice, summary { touch-action: manipulation; }
 a { color: var(--electric-deep); text-underline-offset: 3px; text-decoration-thickness: 2px; }
 a:hover { color: var(--ink); }
 :focus-visible { outline: 3px solid var(--electric); outline-offset: 3px; border-radius: 6px; }
@@ -327,7 +328,7 @@ code, .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; 
 .people { list-style: none; margin: 0; padding: 0; }
 .people > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .9rem; align-items: center; padding: .85rem 0; border-top: 1.5px solid var(--mist); }
 .people > li:first-child { border-top: 0; padding-top: 0; }
-.people .name { font-weight: 700; color: var(--ink); text-decoration: none; }
+.people .name { overflow-wrap: anywhere; font-weight: 700; color: var(--ink); text-decoration: none; }
 .people a.name:hover { text-decoration: underline; }
 .people .meta { font-size: .85rem; color: var(--ink-soft); }
 .people .acts { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: flex-end; }
